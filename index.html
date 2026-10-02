@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pluto-AIS RSSI</title>
-<meta name="description" content="Campañas de medida de potencia (RSSI) de tramas AIS recibidas con un ADALM-Pluto.">
+<meta name="description" content="Potencia recibida (RSSI) de cada trama AIS de los barcos en movimiento, con su trayectoria. ADALM-Pluto, UPCT.">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="style.css">
@@ -18,55 +18,74 @@
   <div id="status" class="status" role="status"></div>
 </header>
 
-<nav class="filters" aria-label="Filtros">
-  <label>Campaña <select id="campaign"></select></label>
-  <div class="seg" id="range" role="group" aria-label="Rango de tiempo">
-    <button data-r="all" class="on">Todo</button>
-    <button data-r="24">24 h</button>
-    <button data-r="6">6 h</button>
-    <button data-r="1">1 h</button>
-  </div>
-  <button id="reload" class="ghost" title="Volver a cargar los datos">Actualizar</button>
+<nav class="tabs" role="tablist">
+  <button role="tab" id="tab-mapa" aria-controls="p-mapa" aria-selected="true">Mapa de trayectos</button>
+  <button role="tab" id="tab-estado" aria-controls="p-estado" aria-selected="false">Estado del PC</button>
 </nav>
 
+<div class="filters">
+  <label>Campaña <select id="campaign"></select></label>
+  <label>Día (UTC) <select id="day"></select></label>
+  <button id="reload" class="ghost" title="Volver a cargar los datos">Actualizar</button>
+</div>
+
 <main>
-  <section class="tiles" id="tiles" aria-label="Resumen"></section>
-
-  <section class="card wide">
-    <div class="card-head">
-      <h2>Potencia recibida por trama</h2>
-      <label>Transmisor <select id="vessel"></select></label>
+  <!-- Pestaña 1: mapa satélite + trayectos -->
+  <section id="p-mapa" role="tabpanel" aria-labelledby="tab-mapa">
+    <div class="map-layout">
+      <aside class="card trips">
+        <div class="card-head">
+          <h2>Trayectos en movimiento</h2>
+          <label class="small">mín. tramas <input id="minn" type="number" min="1" value="5" step="1"></label>
+        </div>
+        <input id="search" type="search" placeholder="Buscar barco o MMSI…" aria-label="Buscar barco">
+        <ul id="trip-list"></ul>
+      </aside>
+      <div class="card map-card">
+        <div id="map"></div>
+        <div id="map-legend" class="ramp-legend"></div>
+      </div>
     </div>
-    <p class="note" id="vessel-note"></p>
-    <div id="c-vessel" class="chart"></div>
+
+    <section class="card" id="trip-detail">
+      <div class="card-head">
+        <h2 id="trip-title">Elige un trayecto</h2>
+        <div class="actions">
+          <button id="dl-trip" class="ghost" disabled>Descargar trayecto (CSV)</button>
+          <button id="dl-day" class="ghost">Descargar día (CSV)</button>
+        </div>
+      </div>
+      <p class="note" id="trip-note"></p>
+      <div class="grid">
+        <div><h3>Potencia frente a distancia</h3><div id="c-dist" class="chart"></div></div>
+        <div><h3>Potencia a lo largo del trayecto</h3><div id="c-time" class="chart"></div></div>
+      </div>
+    </section>
   </section>
 
-  <div class="grid">
-    <section class="card"><h2>Ráfagas detectadas cada 10 min</h2><div id="c-count" class="chart"></div></section>
-    <section class="card"><h2>Ruido de canal (dBFS, mediana cada 10 min)</h2><div id="c-noise" class="chart"></div></section>
-    <section class="card"><h2>Temperatura del AD9363 (°C)</h2><div id="c-temp" class="chart"></div></section>
-    <section class="card"><h2>Potencia mediana frente a distancia <span class="muted small">(sin AtoN virtuales)</span></h2><div id="c-dist" class="chart"></div></section>
-  </div>
-
-  <section class="card wide">
-    <h2>Mapa de transmisores <span class="muted small">(última posición conocida · color = potencia mediana)</span></h2>
-    <div id="map"></div>
-    <div id="map-legend" class="ramp-legend"></div>
-  </section>
-
-  <section class="card wide">
-    <h2>Transmisores <span class="muted small">(pulsa una fila para ver su potencia en el tiempo)</span></h2>
-    <div class="table-wrap"><table id="vessels"></table></div>
-  </section>
-
-  <section class="card wide">
-    <h2>Descargas</h2>
-    <p class="muted small">Datos completos por segmento (CSV comprimido): <code>_merged</code> = RSSI propio + decodificación de AIS-catcher;
-      <code>_aiscatcher</code> = todos los mensajes; <code>_meta</code> = estado del receptor. El IQ de las ráfagas queda en el PC de captura.</p>
-    <div class="table-wrap"><table id="downloads"></table></div>
+  <!-- Pestaña 2: estado del PC de captura -->
+  <section id="p-estado" role="tabpanel" aria-labelledby="tab-estado" hidden>
+    <section class="tiles" id="tiles" aria-label="Resumen del estado"></section>
+    <div class="grid">
+      <section class="card"><h2>Ráfagas detectadas cada 10 min</h2><div id="c-count" class="chart"></div></section>
+      <section class="card"><h2>Barcos recibidos cada 10 min</h2><div id="c-ships" class="chart"></div></section>
+      <section class="card"><h2>Ruido de canal (dBFS, mediana cada 10 min)</h2><div id="c-noise" class="chart"></div></section>
+      <section class="card"><h2>Temperatura del AD9363 (°C)</h2><div id="c-temp" class="chart"></div></section>
+    </div>
+    <section class="card">
+      <h2>Días publicados</h2>
+      <div class="table-wrap"><table id="days"></table></div>
+    </section>
+    <section class="card">
+      <h2>Cómo descargar los datos</h2>
+      <p class="muted small">Desde cualquier ordenador: botones <b>Descargar</b> de la pestaña Mapa (CSV del trayecto o del día),
+        o el repositorio completo con <code>git clone</code> (carpeta <code>data/&lt;campaña&gt;/tracks/</code>, un CSV comprimido por hora).
+        En GitHub solo están las tramas de barcos en movimiento; los datos completos (todas las tramas e IQ) quedan en el PC de captura.</p>
+    </section>
   </section>
 </main>
-<footer class="muted small">Potencias en dBFS (sin calibrar a dBm) medidas por la cadena propia (ruido restado). Datos publicados cada 15 min desde el PC de captura.</footer>
+<footer class="muted small">Potencias en dBFS (sin calibrar a dBm), ruido restado. Posición: «trama» = la del propio mensaje;
+  «interp.» = interpolada entre informes del barco. Se publica cada 15 min.</footer>
 <div id="tip" class="tip" hidden></div>
 
 <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
