@@ -27,9 +27,9 @@
   <label>Campaña <select id="campaign"></select></label>
   <label>Día (UTC) <select id="day"></select></label>
   <label>Barcos en el mapa <select id="fleet">
-    <option value="24h" selected>vistos en las últimas 24 h</option>
+    <option value="moving" selected>solo en movimiento ahora</option>
     <option value="1h">vistos en la última hora</option>
-    <option value="moving">solo en movimiento ahora</option>
+    <option value="24h">vistos en las últimas 24 h (también parados)</option>
     <option value="all">todos los vistos</option>
     <option value="none">ninguno</option>
   </select></label>
@@ -81,6 +81,9 @@
       <section class="card"><h2>Barcos recibidos cada 10 min</h2><div id="c-ships" class="chart"></div></section>
       <section class="card"><h2>Ruido de canal (dBFS, mediana cada 10 min)</h2><div id="c-noise" class="chart"></div></section>
       <section class="card"><h2>Temperatura del AD9363 (°C)</h2><div id="c-temp" class="chart"></div></section>
+      <section class="card"><h2>Potencia de la estación base <span class="muted small">(transmisor fijo a 3 km: referencia)</span></h2><div id="c-ref" class="chart"></div></section>
+      <section class="card"><h2>Oleaje <span class="muted small">(boya de Cartagena, PORTUS)</span></h2><div id="c-wave" class="chart"></div></section>
+      <section class="card"><h2>Viento <span class="muted small">(boya de Cartagena, PORTUS)</span></h2><div id="c-wind" class="chart"></div></section>
     </div>
     <section class="card">
       <h2>Días publicados</h2>

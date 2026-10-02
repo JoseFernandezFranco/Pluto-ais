@@ -58,7 +58,8 @@ const fmtDur = (s) => (s < 60 ? `${Math.round(s)} s` : s < 3600 ? `${Math.round(
   : `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`);
 
 const S = { camp: null, status: null, days: [], day: null, trips: [], bins: [], rows: [], sel: null,
-            ships: [], ship: null, shipTrips: [], shipRows: [], plots: [], map: null, segCache: new Map() };
+            ships: [], ship: null, shipTrips: [], shipRows: [], plots: [], map: null, segCache: new Map(),
+            paths: [], shipPaths: [], meteo: new Map(), meteoMonths: new Map() };
 
 // ---------------------------------------------------------------- carga
 async function getJSON(url, bust = true) {
@@ -74,7 +75,7 @@ async function getTracks(url, bust) {
   const txt = await new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).text();
   const lines = txt.split("\n");
   const head = lines[0].split(",");
-  const num = new Set(["t", "lat", "lon", "sog", "cog", "dist_km", "p", "snr"]);
+  const num = new Set(["t", "lat", "lon", "sog", "cog", "dist_km", "p", "snr", "mov"]);
   const out = [];
   for (let i = 1; i < lines.length; i++) {
     if (!lines[i]) continue;
@@ -88,7 +89,29 @@ async function getTracks(url, bust) {
 }
 
 const base = () => `data/${S.camp}/`;
-const segURL = (s) => (s === "current" ? [`${base()}tracks/current.csv.gz`, true] : [`${base()}tracks/${s}.csv.gz`, false]);
+const segURL = (s, kind = "tracks") => (s === "current" ? [`${base()}${kind}/current.csv.gz`, true]
+                                                         : [`${base()}${kind}/${s}.csv.gz`, false]);
+
+// Estado del mar (PORTUS): un archivo por mes; se cargan los meses de los días pedidos
+async function ensureMeteo(days) {
+  const st = (S.status || {}).meteo_station;
+  if (!st) return;
+  const months = [...new Set(days.filter(Boolean).map((d) => d.slice(0, 7)))];
+  await Promise.all(months.map(async (mo) => {
+    const now = new Date().toISOString().slice(0, 7);
+    if (S.meteoMonths.has(mo) && mo !== now) return;            // el mes en curso se refresca
+    const rows = await getJSON(`data/meteo/portus_${st}/${mo}.json`).catch(() => []);
+    S.meteoMonths.set(mo, true);
+    for (const r of rows) S.meteo.set(r.t, r);
+  }));
+}
+const meteoAt = (t) => {                     // registro más cercano (≤ 45 min)
+  let best = null;
+  for (const [mt, r] of S.meteo) if (Math.abs(mt - t) <= 2700 && (!best || Math.abs(mt - t) < Math.abs(best.t - t))) best = r;
+  return best;
+};
+const meteoText = (m) => (m ? `Mar (boya de Cartagena): Hm0 ${fmt1(m.hm0_m)} m, Tp ${fmt1(m.tp_s)} s, de ${Math.round(m.wave_dir_deg)}° · `
+  + `viento ${fmt1(m.wind_ms)} m/s del ${Math.round(m.wind_dir_deg)}° · ${Math.round(m.pressure_mb)} hPa · ${fmt1(m.air_temp_c)} °C` : "");
 
 async function loadCampaign(name) {
   S.camp = name;
@@ -106,11 +129,14 @@ async function loadDay(day) {
   const [trips, bins] = await Promise.all([getJSON(`${base()}trips/${day}.json`).catch(() => []),
                                            getJSON(`${base()}bins/${day}.json`).catch(() => [])]);
   const segs = [...new Set(trips.flatMap((t) => t.segs))];
-  const parts = await Promise.all(segs.map((s) => getTracks(...segURL(s))));
+  const [parts, pparts] = await Promise.all([Promise.all(segs.map((s) => getTracks(...segURL(s)))),
+                                             Promise.all(segs.map((s) => getTracks(...segURL(s, "paths")))),
+                                             ensureMeteo([day])]);
   const ids = new Set(trips.map((t) => t.trip));
   S.trips = trips;
   S.bins = bins;
   S.rows = parts.flat().filter((r) => ids.has(r.trip)).sort((a, b) => a.t - b.t);
+  S.paths = pparts.flat().filter((r) => ids.has(r.trip)).sort((a, b) => a.t - b.t);
 }
 
 // Todos los trayectos de un barco (todos los días en que se movió)
@@ -120,9 +146,12 @@ async function loadShip(mmsi) {
   const trips = (await Promise.all(days.map((d) => getJSON(`${base()}trips/${d}.json`).catch(() => []))))
     .flat().filter((t) => t.mmsi === mmsi);
   const segs = [...new Set(trips.flatMap((t) => t.segs))];
-  const parts = await Promise.all(segs.map((s) => getTracks(...segURL(s))));
+  const [parts, pparts] = await Promise.all([Promise.all(segs.map((s) => getTracks(...segURL(s)))),
+                                             Promise.all(segs.map((s) => getTracks(...segURL(s, "paths")))),
+                                             ensureMeteo(days)]);
   S.shipTrips = trips.sort((a, b) => b.start - a.start);
   S.shipRows = parts.flat().filter((r) => r.mmsi === mmsi).sort((a, b) => a.t - b.t);
+  S.shipPaths = pparts.flat().filter((r) => r.mmsi === mmsi).sort((a, b) => a.t - b.t);
 }
 
 // ---------------------------------------------------------------- cabecera (ambas pestañas)
@@ -164,7 +193,7 @@ function renderTripList() {
     const li = el("li", { tabIndex: 0, className: t.trip === S.sel ? "sel" : "" },
       el("div", { className: "name" }, iconEl(catOf(info.type || t.type), kindOf(t.class), true, 0, 14), t.name || `MMSI ${t.mmsi}`),
       el("div", { className: "meta", textContent: `${S.ship ? new Date(t.start * 1000).toLocaleDateString("es-ES") + " " : ""}`
-        + `${fmtHM(t.start)}–${fmtHM(t.end)} (${fmtDur(t.end - t.start)}) · ${fmtInt(t.n)} tramas · ${t.sog_med} kn` }),
+        + `${fmtHM(t.start)}–${fmtHM(t.end)} (${fmtDur(t.end - t.start)}) · ${fmtInt(t.n)} tramas · ${fmt1(t.sog_med)} kn` }),
       el("div", { className: "meta", textContent: `${t.d_min != null ? `${fmt1(t.d_min)}–${fmt1(t.d_max)} km` : "sin posición"} · ${fmt1(t.p_min)} … ${fmt1(t.p_max)} dBFS` }));
     const pick = () => selectTrip(t.trip);
     li.addEventListener("click", pick);
@@ -241,14 +270,21 @@ function renderMap() {
   const lo = ps.length ? Math.min(...ps) : -60, hi = ps.length ? Math.max(...ps) : -30;
 
   // Vista primero (antes de añadir líneas)
-  const pts = (hl.length ? hl : rows).map((r) => [r.lat, r.lon]);
+  const hlPath = (S.ship ? S.shipPaths : S.paths).filter((r) => hl.some((h) => h.trip === r.trip));
+  const pts = (hl.length ? [...hl, ...hlPath] : rows).map((r) => [r.lat, r.lon]);
   if (rx.lat != null && !hl.length) pts.push([rx.lat, rx.lon]);
   if (pts.length > 1) S.map.fitBounds(L.latLngBounds(pts).pad(0.15), { maxZoom: 16 });
 
+  // Línea = recorrido completo (todas las posiciones de AIS-catcher); si falta, las tramas medidas
+  const ppool = (S.ship ? S.shipPaths : S.paths).filter((r) => ids.has(r.trip));
   const byTrip = new Map();
-  for (const r of rows) (byTrip.get(r.trip) || byTrip.set(r.trip, []).get(r.trip)).push(r);
+  for (const r of rows) byTrip.set(r.trip, []);
+  for (const r of ppool) (byTrip.get(r.trip) || byTrip.set(r.trip, []).get(r.trip)).push(r);
+  for (const r of rows) if (!ppool.some((p) => p.trip === r.trip)) byTrip.get(r.trip).push(r);
+  const hlTrips = new Set(hl.map((r) => r.trip));
   for (const [trip, tr] of byTrip) {
-    const isHl = hl.length && tr[0] && hl.includes(tr[0]);
+    if (!tr.length) continue;
+    const isHl = hlTrips.has(trip);
     const t = (S.ship ? S.shipTrips : S.trips).find((x) => x.trip === trip) || {};
     L.polyline(tr.map((r) => [r.lat, r.lon]), { color: "#ffffff", weight: isHl ? 3 : 2, opacity: isHl ? 0.9 : 0.45 })
       .bindTooltip(el("div", { textContent: `${t.name || t.mmsi} · ${fmtHM(t.start)}–${fmtHM(t.end)} (${fmtDur(t.end - t.start)})` }), { sticky: true })
@@ -310,8 +346,9 @@ function renderTripDetail() {
   $("#trip-note").textContent = `${kindOf(t.class) === "ship" ? catOf(sh.type || t.type).label : t.class}${t.type ? " · " + t.type : ""} · `
     + `${fmtTime(t.start)} – ${fmtHM(t.end)} (${fmtDur(t.end - t.start)}) · `
     + `${fmtInt(t.n)} tramas (A ${t.nA} · B ${t.nB}) · ${nf} con posición propia · `
-    + `${t.d_min != null ? `${fmt1(t.d_min)}–${fmt1(t.d_max)} km · ` : ""}SOG mediana ${t.sog_med} kn`
-    + (sh.trips > 1 ? ` · este barco tiene ${sh.trips} trayectos (${fmtDur(sh.moving_s)} en total)` : "");
+    + `${t.d_min != null ? `${fmt1(t.d_min)}–${fmt1(t.d_max)} km · ` : ""}SOG mediana ${fmt1(t.sog_med)} kn`
+    + (sh.trips > 1 ? ` · este barco tiene ${sh.trips} trayectos (${fmtDur(sh.moving_s)} en total)` : "")
+    + (meteoAt((t.start + t.end) / 2) ? `\n${meteoText(meteoAt((t.start + t.end) / 2))}` : "");
   renderDistChart(rows);
   renderTimeChart(rows);
 }
@@ -427,12 +464,15 @@ function leaveShip() {
 }
 
 // ---------------------------------------------------------------- descargas (CSV generado en el navegador)
-const CSV_COLS = ["utc", "mmsi", "nombre", "trip", "ch", "lat", "lon", "pos", "sog_kn", "cog", "dist_km", "power_dbfs", "snr_db", "msg_type"];
+const METEO_COLS = ["hm0_m", "hmax_m", "tp_s", "wave_dir_deg", "wind_ms", "wind_dir_deg", "pressure_mb", "air_temp_c"];
+const CSV_COLS = ["utc", "mmsi", "nombre", "trip", "ch", "lat", "lon", "pos", "sog_kn", "cog", "dist_km", "power_dbfs", "snr_db",
+                  "msg_type", ...METEO_COLS.map((c) => "boya_" + c)];
 function downloadCSV(rows, name) {
   const names = new Map([...S.trips, ...S.shipTrips].map((t) => [t.trip, t.name]));
   const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
   const lines = [CSV_COLS.join(",")].concat(rows.map((r) => [new Date(r.t * 1000).toISOString(), r.mmsi, names.get(r.trip) || "",
-    r.trip, r.ch, r.lat, r.lon, r.pos, r.sog, r.cog, r.dist_km, r.p, r.snr, r.msg].map(esc).join(",")));
+    r.trip, r.ch, r.lat, r.lon, r.pos, r.sog, r.cog, r.dist_km, r.p, r.snr, r.msg,
+    ...METEO_COLS.map((c) => (meteoAt(r.t) || {})[c])].map(esc).join(",")));
   const a = el("a", { href: URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" })), download: name });
   document.body.append(a); a.click(); a.remove();
 }
@@ -463,6 +503,13 @@ function renderEstado() {
   makePlot("#c-ships", [x, b.map((r) => r.ships), b.map((r) => r.moving)], [line("Barcos", "--s1", ""), line("En movimiento", "--s2", "")], "barcos", 220);
   makePlot("#c-noise", [x, b.map((r) => r.noiseA), b.map((r) => r.noiseB)], [line("Canal A", "--s1", " dBFS"), line("Canal B", "--s2", " dBFS")], "dBFS", 220);
   makePlot("#c-temp", [x, b.map((r) => r.temp)], [line("Temperatura", "--s1", " °C")], "°C", 220);
+  makePlot("#c-ref", [x, b.map((r) => r.refA ?? null), b.map((r) => r.refB ?? null)],
+           [line("Canal A", "--s1", " dBFS"), line("Canal B", "--s2", " dBFS")], "dBFS", 220);
+  const d0 = Date.parse(`${S.day}T00:00:00Z`) / 1000;
+  const m = [...S.meteo.values()].filter((r) => r.t >= d0 && r.t < d0 + 86400).sort((a, b) => a.t - b.t);
+  makePlot("#c-wave", [m.map((r) => r.t), m.map((r) => r.hm0_m), m.map((r) => r.hmax_m)],
+           [line("Hm0", "--s1", " m"), line("Hmax", "--s2", " m")], "m", 220);
+  makePlot("#c-wind", [m.map((r) => r.t), m.map((r) => r.wind_ms)], [line("Viento", "--s1", " m/s")], "m/s", 220);
 
   const head = el("tr", {}, ...["Día (UTC)", "Trayectos", "Tramas en mov.", "Barcos", "En movimiento", ""].map((h, i) =>
     el("th", { textContent: h, className: i && i < 5 ? "num" : "" })));

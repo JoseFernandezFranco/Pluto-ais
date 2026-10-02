@@ -64,7 +64,7 @@ button:disabled { opacity: .5; cursor: default; }
 .card-head { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 .card-head h2 { margin: 0; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.note { color: var(--ink-2); font-size: 12px; margin: 0 0 8px; }
+.note { color: var(--ink-2); font-size: 12px; margin: 0 0 8px; white-space: pre-line; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 12px; }
 .grid > .card { margin-bottom: 0; }
 .grid + .card { margin-top: 12px; }
