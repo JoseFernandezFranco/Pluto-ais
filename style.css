@@ -115,3 +115,12 @@ footer { padding-bottom: 24px; }
 .tip b { font-variant-numeric: tabular-nums; }
 .leaflet-container { background: #1a1a19; }
 .leaflet-tooltip b { font-variant-numeric: tabular-nums; }
+
+/* Iconos de barco (mapa, lista y leyenda) */
+.ship-ic { background: none; border: 0; }
+.ship-ic svg { display: block; filter: drop-shadow(0 0 1px rgba(0, 0, 0, .8)); }
+.ic { display: inline-flex; vertical-align: -3px; margin-right: 6px; }
+.ic svg { filter: drop-shadow(0 0 1px rgba(0, 0, 0, .5)); }
+.fleet-legend { margin-top: 8px; gap: 6px 14px; }
+.fleet-legend > span { display: inline-flex; align-items: center; }
+button.small { font-size: 12px; padding: 2px 8px; }
