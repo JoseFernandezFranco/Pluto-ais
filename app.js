@@ -75,7 +75,7 @@ async function getTracks(url, bust) {
   const txt = await new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).text();
   const lines = txt.split("\n");
   const head = lines[0].split(",");
-  const num = new Set(["t", "lat", "lon", "sog", "cog", "dist_km", "p", "snr", "mov"]);
+  const num = new Set(["t", "lat", "lon", "sog", "cog", "dist_km", "p", "snr", "mov", "p_own"]);
   const out = [];
   for (let i = 1; i < lines.length; i++) {
     if (!lines[i]) continue;
@@ -295,7 +295,8 @@ function renderMap() {
                                      fillColor: rampColor(r.p, lo, hi), fillOpacity: 1 })
       .bindTooltip(el("div", {}, el("b", { textContent: `${fmt1(r.p)} dBFS` }),
         el("div", { textContent: `${fmtTime(r.t)} · canal ${r.ch} · SNR ${fmt1(r.snr)} dB` }),
-        el("div", { textContent: `${fmt1(r.dist_km)} km · ${fmt1(r.sog)} kn · posición ${r.pos === "f" ? "trama" : "interp."}` })))
+        el("div", { textContent: `${fmt1(r.dist_km)} km · ${fmt1(r.sog)} kn · posición ${r.pos === "f" ? "trama" : "interp."}` }),
+        el("div", { textContent: srcText(r) })))
       .addTo(S.layer);
   }
   if (rx.lat != null) {
@@ -307,7 +308,7 @@ function renderMap() {
     el("span", { textContent: `${fmt1(lo)} dBFS` }),
     el("span", { className: "bar" }, ...ramp().map((c) => el("span", { style: `background:${c}` }))),
     el("span", { textContent: `${fmt1(hi)} dBFS` }),
-    el("span", { textContent: "· potencia de cada trama (marca grande = posición de la propia trama, pequeña = interpolada) · ● negro = receptor" }));
+    el("span", { textContent: "· potencia de cada trama, medida por AIS-catcher (marca grande = posición de la propia trama, pequeña = interpolada) · ● negro = receptor" }));
 }
 
 function renderTripDetail() {
@@ -465,13 +466,18 @@ function leaveShip() {
 
 // ---------------------------------------------------------------- descargas (CSV generado en el navegador)
 const METEO_COLS = ["hm0_m", "hmax_m", "tp_s", "wave_dir_deg", "wind_ms", "wind_dir_deg", "pressure_mb", "air_temp_c"];
+// Fuente de la potencia: ac = AIS-catcher (todas las tramas desde 2026-10-02), own = nuestra cadena
+const srcText = (r) => (r.src === "ac"
+  ? `potencia: AIS-catcher${r.p_own != null ? ` · nuestra: ${fmt1(r.p_own)} dBFS` : " · bajo nuestro umbral de detección"}`
+  : `potencia: nuestra cadena${r.src === "own" ? " (AIS-catcher no la tiene)" : ""}`);
 const CSV_COLS = ["utc", "mmsi", "nombre", "trip", "ch", "lat", "lon", "pos", "sog_kn", "cog", "dist_km", "power_dbfs", "snr_db",
+                  "power_src", "power_own_dbfs",
                   "msg_type", ...METEO_COLS.map((c) => "boya_" + c)];
 function downloadCSV(rows, name) {
   const names = new Map([...S.trips, ...S.shipTrips].map((t) => [t.trip, t.name]));
   const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
   const lines = [CSV_COLS.join(",")].concat(rows.map((r) => [new Date(r.t * 1000).toISOString(), r.mmsi, names.get(r.trip) || "",
-    r.trip, r.ch, r.lat, r.lon, r.pos, r.sog, r.cog, r.dist_km, r.p, r.snr, r.msg,
+    r.trip, r.ch, r.lat, r.lon, r.pos, r.sog, r.cog, r.dist_km, r.p, r.snr, r.src || "own", r.p_own, r.msg,
     ...METEO_COLS.map((c) => (meteoAt(r.t) || {})[c])].map(esc).join(",")));
   const a = el("a", { href: URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" })), download: name });
   document.body.append(a); a.click(); a.remove();
