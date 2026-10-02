@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pluto-AIS RSSI</title>
+<meta name="description" content="Campañas de medida de potencia (RSSI) de tramas AIS recibidas con un ADALM-Pluto.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="title">
+    <h1>Pluto-AIS · RSSI por trama</h1>
+    <p id="subtitle" class="muted">Cargando…</p>
+  </div>
+  <div id="status" class="status" role="status"></div>
+</header>
+
+<nav class="filters" aria-label="Filtros">
+  <label>Campaña <select id="campaign"></select></label>
+  <div class="seg" id="range" role="group" aria-label="Rango de tiempo">
+    <button data-r="all" class="on">Todo</button>
+    <button data-r="24">24 h</button>
+    <button data-r="6">6 h</button>
+    <button data-r="1">1 h</button>
+  </div>
+  <button id="reload" class="ghost" title="Volver a cargar los datos">Actualizar</button>
+</nav>
+
+<main>
+  <section class="tiles" id="tiles" aria-label="Resumen"></section>
+
+  <section class="card wide">
+    <div class="card-head">
+      <h2>Potencia recibida por trama</h2>
+      <label>Transmisor <select id="vessel"></select></label>
+    </div>
+    <p class="note" id="vessel-note"></p>
+    <div id="c-vessel" class="chart"></div>
+  </section>
+
+  <div class="grid">
+    <section class="card"><h2>Ráfagas detectadas cada 10 min</h2><div id="c-count" class="chart"></div></section>
+    <section class="card"><h2>Ruido de canal (dBFS, mediana cada 10 min)</h2><div id="c-noise" class="chart"></div></section>
+    <section class="card"><h2>Temperatura del AD9363 (°C)</h2><div id="c-temp" class="chart"></div></section>
+    <section class="card"><h2>Potencia mediana frente a distancia</h2><div id="c-dist" class="chart"></div></section>
+  </div>
+
+  <section class="card wide">
+    <h2>Mapa de transmisores <span class="muted small">(última posición conocida · color = potencia mediana)</span></h2>
+    <div id="map"></div>
+    <div id="map-legend" class="ramp-legend"></div>
+  </section>
+
+  <section class="card wide">
+    <h2>Transmisores <span class="muted small">(pulsa una fila para ver su potencia en el tiempo)</span></h2>
+    <div class="table-wrap"><table id="vessels"></table></div>
+  </section>
+
+  <section class="card wide">
+    <h2>Descargas</h2>
+    <p class="muted small">Datos completos por segmento (CSV comprimido): <code>_merged</code> = RSSI propio + decodificación de AIS-catcher;
+      <code>_aiscatcher</code> = todos los mensajes; <code>_meta</code> = estado del receptor. El IQ de las ráfagas queda en el PC de captura.</p>
+    <div class="table-wrap"><table id="downloads"></table></div>
+  </section>
+</main>
+<footer class="muted small">Potencias en dBFS (sin calibrar a dBm) medidas por la cadena propia (ruido restado). Datos publicados cada 15 min desde el PC de captura.</footer>
+<div id="tip" class="tip" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
