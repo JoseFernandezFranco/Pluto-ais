@@ -1,0 +1,44 @@
+{
+ "start_utc": "2026-10-02T09:19:41.996189+00:00",
+ "source": "ip:192.168.2.1",
+ "gain_db": 40.0,
+ "config_rssi": {
+  "lo_hz": 162000000,
+  "sample_rate": 1536000,
+  "rf_bandwidth": 1000000,
+  "gain_db": 40,
+  "buffer_size": 262144,
+  "kernel_buffers": 8,
+  "detector": {
+   "on_db": 6,
+   "off_db": 3,
+   "min_ms": 10,
+   "max_ms": 140
+  },
+  "clip_threshold_fs": 0.9,
+  "hw_poll_s": 5,
+  "aiscatcher_parallel": true,
+  "save_bursts": true,
+  "output_dir": "output/rssi"
+ },
+ "hw_state_start": {
+  "rx_lo_hz": 162000000,
+  "sample_rate": 1536000,
+  "rf_bandwidth": 1000000,
+  "gain_mode": "manual",
+  "gain_db": 40.0,
+  "rx_lo_powerdown": "0",
+  "rssi_db": 95.75,
+  "temp_c": 30.702
+ },
+ "calibration": null,
+ "aiscatcher_dropped_blocks": 0,
+ "end_utc": "2026-10-02T09:52:41.566616+00:00",
+ "bursts": 2162,
+ "seconds_processed": 2095.616,
+ "clock_lag_growth_s": 0.20236563682556152,
+ "noise_dbfs_final": {
+  "A": -82.52303539995553,
+  "B": -82.50868129146723
+ }
+}
