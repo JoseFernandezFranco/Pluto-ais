@@ -194,7 +194,8 @@ function renderVessel(pts, vs) {
 function renderDistance(vs) {
   const box = $("#c-dist");
   box.replaceChildren();
-  const d = vs.filter((v) => v.dist_km != null && v.dist_km > 0.01);
+  // Las AtoN (MMSI 99…) de esta zona son virtuales: las emite la estación base, su posición no es el transmisor
+  const d = vs.filter((v) => v.dist_km != null && v.dist_km > 0.01 && !v.mmsi.startsWith("99"));
   if (!d.length) { box.append(el("div", { className: "empty", textContent: "Sin posiciones en este rango" })); return; }
   const W = box.clientWidth, H = 210, m = { l: 56, r: 12, t: 22, b: 34 };
   const xs = d.map((v) => Math.log10(v.dist_km));
