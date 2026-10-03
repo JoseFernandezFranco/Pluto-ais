@@ -124,3 +124,13 @@ footer { padding-bottom: 24px; }
 .fleet-legend { margin-top: 8px; gap: 6px 14px; }
 .fleet-legend > span { display: inline-flex; align-items: center; }
 button.small { font-size: 12px; padding: 2px 8px; }
+
+/* Ficha de una trama (popup del mapa) */
+.pt-card { font-size: 12px; line-height: 1.35; max-height: 60vh; overflow-y: auto; }
+.pt-head { font-size: 13px; margin-bottom: 4px; }
+.pt-sec { font-weight: 600; margin: 8px 0 2px; color: #52514e; text-transform: uppercase; font-size: 10.5px; letter-spacing: .04em; }
+.pt-card table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.pt-card th, .pt-card td { padding: 1px 0; border: 0; white-space: normal; vertical-align: top; }
+.pt-card th { color: #52514e; font-weight: 400; padding-right: 8px; width: 42%; }
+.pt-card td { font-variant-numeric: tabular-nums; }
+.pt-none, .pt-src { color: #52514e; margin: 8px 0 0; }

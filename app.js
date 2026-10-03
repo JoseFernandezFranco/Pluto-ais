@@ -59,7 +59,7 @@ const fmtDur = (s) => (s < 60 ? `${Math.round(s)} s` : s < 3600 ? `${Math.round(
 
 const S = { camp: null, status: null, days: [], day: null, trips: [], bins: [], rows: [], sel: null,
             ships: [], ship: null, shipTrips: [], shipRows: [], plots: [], map: null, segCache: new Map(),
-            paths: [], shipPaths: [], meteo: new Map(), meteoMonths: new Map() };
+            paths: [], shipPaths: [], meteo: new Map(), meteoMonths: new Map(), env: new Map(), envDays: new Map() };
 
 // ---------------------------------------------------------------- carga
 async function getJSON(url, bust = true) {
@@ -113,6 +113,81 @@ const meteoAt = (t) => {                     // registro más cercano (≤ 45 mi
 const meteoText = (m) => (m ? `Mar (boya de Cartagena): Hm0 ${fmt1(m.hm0_m)} m, Tp ${fmt1(m.tp_s)} s, de ${Math.round(m.wave_dir_deg)}° · `
   + `viento ${fmt1(m.wind_ms)} m/s del ${Math.round(m.wind_dir_deg)}° · ${Math.round(m.pressure_mb)} hPa · ${fmt1(m.air_temp_c)} °C` : "");
 
+// Entorno de cada trama (plutoais.entorno, diario): mar, agua, aire y refracción en su posición e instante
+const ENV_COLS = ["hm0_m", "costa_hm0_m", "costa_tp_s", "costa_tm02_s", "costa_tm0z_s", "costa_dir_media_deg",
+  "costa_dir_pico_deg", "costa_swell_hm0_m", "puerto_hm0_m", "corr_vel_ms", "corr_dir_deg", "temp_agua_c",
+  "salinidad_psu", "nivel_m", "viento_ms", "viento_dir_deg", "rafaga_ms", "presion_hpa", "temp_aire_c", "humedad_pct",
+  "radiacion_wm2", "nubosidad_pct", "n_sup", "dndh_1km", "k", "dt_mar_aire_c", "fuente_oleaje", "fuente_corr"];
+const envKey = (r) => `${(+r.t).toFixed(2)}|${r.mmsi}|${r.ch}`;
+const envOf = (r) => S.env.get(envKey(r));
+async function ensureEnv(days) {
+  const recent = new Date(Date.now() - 3 * 86400e3).toISOString().slice(0, 10);
+  await Promise.all(days.filter(Boolean).map(async (d) => {
+    if (S.envDays.get(d) && d < recent) return;                 // días recientes: se refrescan (FC → HC)
+    try {
+      const r = await fetch(`${base()}entorno/${d}.csv.gz?v=${Date.now()}`);
+      if (!r.ok) { S.envDays.set(d, false); return; }
+      const txt = await new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).text();
+      const lines = txt.split("\n"), head = lines[0].split(",");
+      for (let i = 1; i < lines.length; i++) {
+        if (!lines[i]) continue;
+        const v = lines[i].split(","), o = {};
+        head.forEach((h, k) => { o[h] = h === "mmsi" || h === "ch" || h.startsWith("fuente") ? v[k] : (v[k] === "" ? null : +v[k]); });
+        S.env.set(envKey(o), o);
+      }
+      S.envDays.set(d, true);
+    } catch { S.envDays.set(d, false); }
+  }));
+}
+const dayOfT = (t) => new Date(t * 1000).toISOString().slice(0, 10);
+const refrClass = (g) => (g == null ? "—" : g > 0 ? "subrefracción" : g >= -79 ? "normal" : g >= -157 ? "superrefracción" : "conducto");
+const fmtN = (v, nd = 1, unit = "") => (v == null || Number.isNaN(v) ? "—" : `${(+v).toFixed(nd)}${unit}`);
+
+// Ficha de una trama (popup del mapa): potencia + entorno en su posición e instante
+function pointCard(r) {
+  const e = envOf(r), m = meteoAt(r.t);
+  const card = el("div", { className: "pt-card" });
+  const sec = (title, rows) => {
+    card.append(el("div", { className: "pt-sec", textContent: title }));
+    const tb = el("table");
+    for (const [k, v] of rows) tb.append(el("tr", {}, el("th", { textContent: k }), el("td", { textContent: v })));
+    card.append(tb);
+  };
+  const t = (S.ship ? S.shipTrips : S.trips).find((x) => x.trip === r.trip) || {};
+  card.append(el("div", { className: "pt-head" }, el("b", { textContent: `${fmt1(r.p)} dBFS` }),
+    ` · ${t.name || "MMSI " + r.mmsi} · canal ${r.ch}`));
+  sec("Trama", [["Hora", fmtTime(r.t) + ":" + String(new Date(r.t * 1000).getSeconds()).padStart(2, "0")],
+    ["SNR", fmtN(r.snr, 1, " dB")], ["Distancia", fmtN(r.dist_km, 2, " km")], ["Velocidad", `${fmtN(r.sog, 1, " kn")} · rumbo ${fmtN(r.cog, 0, "°")}`],
+    ["Posición", `${(+r.lat).toFixed(5)}, ${(+r.lon).toFixed(5)} (${r.pos === "f" ? "de la trama" : "interpolada"})`],
+    ["Potencia", srcText(r)]]);
+  if (!e) {
+    card.append(el("p", { className: "pt-none", textContent: S.envDays.get(dayOfT(r.t))
+      ? "Sin datos de entorno para esta trama."
+      : "Entorno de este día aún no publicado (se calcula cada día a las 06:10 UTC para el día anterior)." }));
+  } else {
+    const port = e.puerto_hm0_m != null;
+    sec("Mar (Puertos del Estado)", [
+      ["Altura de ola Hm0", `${fmtN(e.hm0_m, 2, " m")} (${port ? "modelo del puerto" : "modelo costero"})`],
+      ["Ola (modelo costero)", fmtN(e.costa_hm0_m, 2, " m")], ["Mar de fondo", fmtN(e.costa_swell_hm0_m, 2, " m")],
+      ["Periodo de pico", fmtN(e.costa_tp_s, 1, " s")], ["Periodo medio Tm02 / Tm0z", `${fmtN(e.costa_tm02_s, 1)} / ${fmtN(e.costa_tm0z_s, 1)} s`],
+      ["Oleaje viene del", `${fmtN(e.costa_dir_media_deg, 0, "°")} (pico ${fmtN(e.costa_dir_pico_deg, 0, "°")})`]]);
+    sec("Agua", [["Corriente", `${fmtN(e.corr_vel_ms == null ? null : e.corr_vel_ms * 100, 1, " cm/s")} hacia ${fmtN(e.corr_dir_deg, 0, "°")}`],
+      ["Temperatura", fmtN(e.temp_agua_c, 2, " °C")], ["Salinidad", fmtN(e.salinidad_psu, 2, " psu")],
+      ["Nivel del mar (modelo)", fmtN(e.nivel_m, 3, " m")]]);
+    sec("Aire (ICON-EU)", [["Viento", `${fmtN(e.viento_ms, 1, " m/s")} del ${fmtN(e.viento_dir_deg, 0, "°")}`], ["Ráfaga", fmtN(e.rafaga_ms, 1, " m/s")],
+      ["Temperatura", fmtN(e.temp_aire_c, 1, " °C")], ["Humedad", fmtN(e.humedad_pct, 0, " %")],
+      ["Presión", fmtN(e.presion_hpa, 1, " hPa")],
+      ["Radiación solar", fmtN(e.radiacion_wm2, 0, " W/m²")], ["Nubosidad", fmtN(e.nubosidad_pct, 0, " %")]]);
+    const dt = e.dt_mar_aire_c;
+    sec("Refracción (ITU-R P.453)", [["N en superficie", fmtN(e.n_sup, 1, " N")],
+      ["dN/dh (0–1 km)", `${fmtN(e.dndh_1km, 1, " N/km")} · ${refrClass(e.dndh_1km)}`], ["Factor k", fmtN(e.k, 3)],
+      ["T agua − T aire", `${fmtN(dt, 2, " °C")}${dt == null ? "" : dt > 0 ? " (aire inestable)" : " (aire estable: favorece conductos)"}`]]);
+    card.append(el("div", { className: "pt-src", textContent: `Modelos: oleaje ${e.fuente_oleaje || "—"} · corriente ${e.fuente_corr || "—"} (HC = análisis, FC = pronóstico)` }));
+  }
+  if (m) card.append(el("div", { className: "pt-src", textContent: meteoText(m) }));
+  return card;
+}
+
 async function loadCampaign(name) {
   S.camp = name;
   [S.status, S.days, S.ships] = await Promise.all([getJSON(base() + "status.json"),
@@ -131,7 +206,7 @@ async function loadDay(day) {
   const segs = [...new Set(trips.flatMap((t) => t.segs))];
   const [parts, pparts] = await Promise.all([Promise.all(segs.map((s) => getTracks(...segURL(s)))),
                                              Promise.all(segs.map((s) => getTracks(...segURL(s, "paths")))),
-                                             ensureMeteo([day])]);
+                                             ensureMeteo([day]), ensureEnv([day])]);
   const ids = new Set(trips.map((t) => t.trip));
   S.trips = trips;
   S.bins = bins;
@@ -148,7 +223,7 @@ async function loadShip(mmsi) {
   const segs = [...new Set(trips.flatMap((t) => t.segs))];
   const [parts, pparts] = await Promise.all([Promise.all(segs.map((s) => getTracks(...segURL(s)))),
                                              Promise.all(segs.map((s) => getTracks(...segURL(s, "paths")))),
-                                             ensureMeteo(days)]);
+                                             ensureMeteo(days), ensureEnv(days)]);
   S.shipTrips = trips.sort((a, b) => b.start - a.start);
   S.shipRows = parts.flat().filter((r) => r.mmsi === mmsi).sort((a, b) => a.t - b.t);
   S.shipPaths = pparts.flat().filter((r) => r.mmsi === mmsi).sort((a, b) => a.t - b.t);
@@ -273,7 +348,7 @@ function renderMap() {
   const hlPath = (S.ship ? S.shipPaths : S.paths).filter((r) => hl.some((h) => h.trip === r.trip));
   const pts = (hl.length ? [...hl, ...hlPath] : rows).map((r) => [r.lat, r.lon]);
   if (rx.lat != null && !hl.length) pts.push([rx.lat, rx.lon]);
-  if (pts.length > 1) S.map.fitBounds(L.latLngBounds(pts).pad(0.15), { maxZoom: 16 });
+  if (pts.length > 1) S.map.fitBounds(L.latLngBounds(pts).pad(0.15), { maxZoom: 16, animate: false });
 
   // Línea = recorrido completo (todas las posiciones de AIS-catcher); si falta, las tramas medidas
   const ppool = (S.ship ? S.shipPaths : S.paths).filter((r) => ids.has(r.trip));
@@ -290,14 +365,20 @@ function renderMap() {
       .bindTooltip(el("div", { textContent: `${t.name || t.mmsi} · ${fmtHM(t.start)}–${fmtHM(t.end)} (${fmtDur(t.end - t.start)})` }), { sticky: true })
       .on("click", () => selectTrip(trip)).addTo(S.layer);
   }
+  S.markers = new Map();
   for (const r of hl) {
-    L.circleMarker([r.lat, r.lon], { radius: r.pos === "f" ? 6 : 4, color: "#1a1a19", weight: 1.5,
+    const e = envOf(r);
+    const mk = L.circleMarker([r.lat, r.lon], { radius: r.pos === "f" ? 6 : 4, color: "#1a1a19", weight: 1.5,
                                      fillColor: rampColor(r.p, lo, hi), fillOpacity: 1 })
       .bindTooltip(el("div", {}, el("b", { textContent: `${fmt1(r.p)} dBFS` }),
         el("div", { textContent: `${fmtTime(r.t)} · canal ${r.ch} · SNR ${fmt1(r.snr)} dB` }),
         el("div", { textContent: `${fmt1(r.dist_km)} km · ${fmt1(r.sog)} kn · posición ${r.pos === "f" ? "trama" : "interp."}` }),
-        el("div", { textContent: srcText(r) })))
+        el("div", { textContent: srcText(r) }),
+        el("div", { textContent: e ? `ola ${fmtN(e.hm0_m, 2, " m")} · viento ${fmtN(e.viento_ms, 1, " m/s")} · k ${fmtN(e.k, 2)}` : "" }),
+        el("div", { className: "muted", textContent: "clic: todos los datos del punto" })))
+      .bindPopup(() => pointCard(r), { maxWidth: 340, minWidth: 260, autoPanPadding: [20, 20] })
       .addTo(S.layer);
+    S.markers.set(envKey(r), mk);
   }
   if (rx.lat != null) {
     L.circleMarker([rx.lat, rx.lon], { radius: 7, color: "#ffffff", weight: 2, fillColor: "#0b0b0b", fillOpacity: 1 })
@@ -398,6 +479,11 @@ function renderDistChart(rows) {
     hit.addEventListener("pointermove", (ev) => tip(ev, [[`${fmt1(r.p)} dBFS`, `canal ${r.ch}`],
       [`${r.dist_km.toFixed(3)} km`, fmtTime(r.t)], [`${fmt1(r.snr)} dB`, "SNR"]]));
     hit.addEventListener("pointerleave", () => ($("#tip").hidden = true));
+    hit.style.cursor = "pointer";
+    hit.addEventListener("click", () => {                 // abre la ficha del punto en el mapa
+      const mk = (S.markers || new Map()).get(envKey(r));
+      if (mk) { $("#map").scrollIntoView({ behavior: "smooth", block: "center" }); mk.openPopup(); }
+    });
   }
   box.append(svg);
 }
@@ -472,13 +558,13 @@ const srcText = (r) => (r.src === "ac"
   : `potencia: nuestra cadena${r.src === "own" ? " (AIS-catcher no la tiene)" : ""}`);
 const CSV_COLS = ["utc", "mmsi", "nombre", "trip", "ch", "lat", "lon", "pos", "sog_kn", "cog", "dist_km", "power_dbfs", "snr_db",
                   "power_src", "power_own_dbfs",
-                  "msg_type", ...METEO_COLS.map((c) => "boya_" + c)];
+                  "msg_type", ...METEO_COLS.map((c) => "boya_" + c), ...ENV_COLS];
 function downloadCSV(rows, name) {
   const names = new Map([...S.trips, ...S.shipTrips].map((t) => [t.trip, t.name]));
   const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
   const lines = [CSV_COLS.join(",")].concat(rows.map((r) => [new Date(r.t * 1000).toISOString(), r.mmsi, names.get(r.trip) || "",
     r.trip, r.ch, r.lat, r.lon, r.pos, r.sog, r.cog, r.dist_km, r.p, r.snr, r.src || "own", r.p_own, r.msg,
-    ...METEO_COLS.map((c) => (meteoAt(r.t) || {})[c])].map(esc).join(",")));
+    ...METEO_COLS.map((c) => (meteoAt(r.t) || {})[c]), ...ENV_COLS.map((c) => (envOf(r) || {})[c])].map(esc).join(",")));
   const a = el("a", { href: URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" })), download: name });
   document.body.append(a); a.click(); a.remove();
 }
@@ -544,8 +630,9 @@ function showTab(name) {
 function render() {
   renderStatus();
   if (current() === "mapa") {
+    if (!S.map) initMap();
+    S.map.invalidateSize();          // antes de encuadrar: si el mapa estaba oculto, su tamaño era 0
     renderMapTab();
-    S.map.invalidateSize();
   } else {
     renderEstado();
   }
