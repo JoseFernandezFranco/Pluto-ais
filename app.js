@@ -1,5 +1,6 @@
 // Dashboard Pluto-AIS: lee data/ (generado por plutoais.publish).
 // Pestaña "Mapa": trayectos de barcos en movimiento sobre satélite, con la potencia de cada trama.
+// Pestaña "Mar y meteorología": boya, perfil del modelo, refracción, radiosondeos y METAR del día.
 // Pestaña "Estado": salud del PC de captura. Sin compilación: HTML + uPlot + Leaflet.
 "use strict";
 
@@ -59,7 +60,8 @@ const fmtDur = (s) => (s < 60 ? `${Math.round(s)} s` : s < 3600 ? `${Math.round(
 
 const S = { camp: null, status: null, days: [], day: null, trips: [], bins: [], rows: [], sel: null,
             ships: [], ship: null, shipTrips: [], shipRows: [], plots: [], map: null, segCache: new Map(),
-            paths: [], shipPaths: [], meteo: new Map(), meteoMonths: new Map(), env: new Map(), envDays: new Map() };
+            paths: [], shipPaths: [], meteo: new Map(), meteoMonths: new Map(), env: new Map(), envDays: new Map(),
+            atm: new Map() };
 
 // ---------------------------------------------------------------- carga
 async function getJSON(url, bust = true) {
@@ -139,9 +141,97 @@ async function ensureEnv(days) {
     } catch { S.envDays.set(d, false); }
   }));
 }
+// Atmósfera del día (data/meteo/atm/<día>.json): perfil horario del modelo, radiosondeos, METAR
+async function ensureAtm(day) {
+  if (!day) return;
+  const recent = new Date(Date.now() - 3 * 86400e3).toISOString().slice(0, 10);
+  if (S.atm.has(day) && S.atm.get(day) && day < recent) return;
+  S.atm.set(day, await getJSON(`data/meteo/atm/${day}.json`).catch(() => null));
+}
 const dayOfT = (t) => new Date(t * 1000).toISOString().slice(0, 10);
 const refrClass = (g) => (g == null ? "—" : g > 0 ? "subrefracción" : g >= -79 ? "normal" : g >= -157 ? "superrefracción" : "conducto");
 const fmtN = (v, nd = 1, unit = "") => (v == null || Number.isNaN(v) ? "—" : `${(+v).toFixed(nd)}${unit}`);
+
+// Flechas de dirección sobre el trayecto elegido. Todas se dibujan HACIA DÓNDE VA el flujo (convención de
+// las flechas de viento en los mapas): oleaje y viento se dan "de dónde vienen" → se giran 180°.
+// Longitud según la intensidad (entre lmin y lmax px). Cada tipo se puede ocultar; la densidad se elige.
+const ARROWS = [
+  { k: "wave", label: "Oleaje", color: "#4da3ff", def: true,
+    dir: (e) => (e.costa_dir_media_deg == null ? null : (e.costa_dir_media_deg + 180) % 360),
+    mag: (e) => e.hm0_m, max: 2,
+    text: (e) => `Oleaje: Hm0 ${fmtN(e.hm0_m, 2, " m")}, viene del ${fmtN(e.costa_dir_media_deg, 0, "°")}` },
+  { k: "curr", label: "Corriente", color: "#2ee6c5", def: true,
+    dir: (e) => e.corr_dir_deg, mag: (e) => e.corr_vel_ms, max: 0.5,
+    text: (e) => `Corriente: ${fmtN(e.corr_vel_ms == null ? null : e.corr_vel_ms * 100, 1, " cm/s")} hacia ${fmtN(e.corr_dir_deg, 0, "°")}` },
+  { k: "wind", label: "Viento", color: "#ff6fd8", def: true,
+    dir: (e) => (e.viento_dir_deg == null ? null : (e.viento_dir_deg + 180) % 360),
+    mag: (e) => e.viento_ms, max: 15,
+    text: (e) => `Viento: ${fmtN(e.viento_ms, 1, " m/s")} del ${fmtN(e.viento_dir_deg, 0, "°")}` },
+  { k: "cog", label: "Rumbo del barco", color: "#f2f2f2", def: false,
+    dir: (e, r) => r.cog, mag: (e, r) => r.sog, max: 15,
+    text: (e, r) => `Rumbo del barco: ${fmtN(r.cog, 0, "°")} a ${fmtN(r.sog, 1, " kn")}` },
+];
+const store = {                          // preferencias de este navegador (si el almacenamiento falla, no pasa nada)
+  get(k, d) { try { const v = localStorage.getItem("pluto-ais:" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("pluto-ais:" + k, JSON.stringify(v)); } catch { /* sin almacenamiento */ } },
+};
+const arrowOn = Object.fromEntries(ARROWS.map((a) => [a.k, store.get("arrow-" + a.k, a.def)]));
+let arrowDensity = store.get("arrow-density", 20);
+let showPoints = store.get("show-points", false);      // puntos de potencia (color = dBFS); por defecto, solo línea + flechas
+
+function arrowSVG(color, len, rot) {
+  const L = Math.round(len), h = 6;
+  const sz = 2 * L + 4;
+  const path = `M0,0 L0,${-L + h} M${-h / 1.6},${-L + h} L0,${-L} L${h / 1.6},${-L + h} Z`;
+  return `<svg width="${sz}" height="${sz}" viewBox="${-sz / 2} ${-sz / 2} ${sz} ${sz}"><g transform="rotate(${rot})">`
+    + `<path d="${path}" stroke="#0b0b0b" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round" fill="#0b0b0b"/>`
+    + `<path d="${path}" stroke="${color}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" fill="${color}"/></g></svg>`;
+}
+
+function renderArrows(hl) {
+  const box = $("#arrow-ctl");
+  box.hidden = !hl.length;
+  if (!hl.length) return;
+  const withEnv = hl.filter((r) => envOf(r));
+  const step = Math.max(1, Math.ceil(hl.length / arrowDensity));
+  const pick = hl.filter((_, i) => i % step === 0);
+  for (const a of ARROWS) {
+    if (!arrowOn[a.k]) continue;
+    for (const r of pick) {
+      const e = envOf(r) || {};
+      const d = a.dir(e, r), m = a.mag(e, r);
+      if (d == null || m == null || Number.isNaN(d)) continue;
+      const len = 12 + 22 * Math.min(1, Math.max(0, m / a.max));
+      const sz = 2 * Math.round(len) + 4;
+      L.marker([r.lat, r.lon], { icon: L.divIcon({ html: arrowSVG(a.color, len, d), className: "arrow-ic",
+                                                    iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2] }),
+                                 keyboard: false, zIndexOffset: -100 })
+        .bindTooltip(el("div", {}, el("b", { textContent: a.text(e, r) }), el("div", { textContent: fmtTime(r.t) }),
+                        el("div", { className: "muted", textContent: "clic: todos los datos del punto" })), { direction: "top" })
+        .bindPopup(() => pointCard(r), { maxWidth: 340, minWidth: 260, autoPanPadding: [20, 20] })
+        .addTo(S.layer);
+    }
+  }
+  const chips = ARROWS.map((a) => {
+    const cb = el("input", { type: "checkbox", checked: arrowOn[a.k], id: "arrow-" + a.k });
+    cb.addEventListener("change", () => { arrowOn[a.k] = cb.checked; store.set("arrow-" + a.k, cb.checked); renderMap(); });
+    const sw = el("span", { className: "arrow-sw" });
+    sw.innerHTML = arrowSVG(a.color, 9, 45);              // SVG generado aquí (sin datos externos)
+    return el("label", { className: "chip", htmlFor: "arrow-" + a.k }, cb, sw, a.label);
+  });
+  const dens = el("input", { type: "range", min: 5, max: 100, step: 5, value: arrowDensity, id: "arrow-density",
+                             ariaLabel: "Flechas por tipo" });
+  const dl = el("span", { className: "muted", textContent: `${Math.min(arrowDensity, hl.length)} por tipo` });
+  dens.addEventListener("input", () => { arrowDensity = +dens.value; dl.textContent = `${Math.min(arrowDensity, hl.length)} por tipo`; });
+  dens.addEventListener("change", () => { store.set("arrow-density", arrowDensity); renderMap(); });
+  const pcb = el("input", { type: "checkbox", checked: showPoints, id: "show-points" });
+  pcb.addEventListener("change", () => { showPoints = pcb.checked; store.set("show-points", showPoints); renderMap(); });
+  const pts = el("label", { className: "chip", htmlFor: "show-points" }, pcb, "Puntos de potencia (color = dBFS)");
+  box.replaceChildren(el("span", { className: "arrow-title", textContent: "Flechas (hacia dónde va):" }), ...chips,
+    el("label", { className: "chip", htmlFor: "arrow-density" }, "densidad", dens, dl),
+    pts, el("span", { className: "muted small", textContent: withEnv.length ? "· pincha en una flecha o un punto para ver todos sus datos"
+      : "· entorno de este día aún no publicado (solo el rumbo del barco)" }));
+}
 
 // Ficha de una trama (popup del mapa): potencia + entorno en su posición e instante
 function pointCard(r) {
@@ -206,7 +296,7 @@ async function loadDay(day) {
   const segs = [...new Set(trips.flatMap((t) => t.segs))];
   const [parts, pparts] = await Promise.all([Promise.all(segs.map((s) => getTracks(...segURL(s)))),
                                              Promise.all(segs.map((s) => getTracks(...segURL(s, "paths")))),
-                                             ensureMeteo([day]), ensureEnv([day])]);
+                                             ensureMeteo([day]), ensureEnv([day]), ensureAtm(day)]);
   const ids = new Set(trips.map((t) => t.trip));
   S.trips = trips;
   S.bins = bins;
@@ -376,15 +466,17 @@ function renderMap() {
         el("div", { textContent: srcText(r) }),
         el("div", { textContent: e ? `ola ${fmtN(e.hm0_m, 2, " m")} · viento ${fmtN(e.viento_ms, 1, " m/s")} · k ${fmtN(e.k, 2)}` : "" }),
         el("div", { className: "muted", textContent: "clic: todos los datos del punto" })))
-      .bindPopup(() => pointCard(r), { maxWidth: 340, minWidth: 260, autoPanPadding: [20, 20] })
-      .addTo(S.layer);
+      .bindPopup(() => pointCard(r), { maxWidth: 340, minWidth: 260, autoPanPadding: [20, 20] });
+    if (showPoints) mk.addTo(S.layer);
     S.markers.set(envKey(r), mk);
   }
+  renderArrows(hl);
   if (rx.lat != null) {
     L.circleMarker([rx.lat, rx.lon], { radius: 7, color: "#ffffff", weight: 2, fillColor: "#0b0b0b", fillOpacity: 1 })
       .bindTooltip(el("div", { textContent: `Receptor · ${rx.name || ""}` })).addTo(S.layer);
   }
   renderFleet();
+  $("#map-legend").hidden = !showPoints && hl.length > 0;
   $("#map-legend").replaceChildren(
     el("span", { textContent: `${fmt1(lo)} dBFS` }),
     el("span", { className: "bar" }, ...ramp().map((c) => el("span", { style: `background:${c}` }))),
@@ -419,6 +511,10 @@ function renderTripDetail() {
     $("#trip-note").textContent = "Selecciónalo en la lista, haz clic en su línea o en un barco del mapa (recorrido completo).";
     $("#c-dist").replaceChildren(el("div", { className: "empty", textContent: "—" }));
     $("#c-time").replaceChildren(el("div", { className: "empty", textContent: "—" }));
+    for (const id of ["#c-env-wave", "#c-env-curr", "#c-env-wind", "#c-env-temp", "#c-env-refr", "#c-env-dist"])
+      $(id).replaceChildren(el("div", { className: "empty", textContent: "—" }));
+    S.ballRows = [];
+    moveBall(null);
     return;
   }
   const rows = rowsAll.filter((r) => r.trip === S.sel);
@@ -482,7 +578,8 @@ function renderDistChart(rows) {
     hit.style.cursor = "pointer";
     hit.addEventListener("click", () => {                 // abre la ficha del punto en el mapa
       const mk = (S.markers || new Map()).get(envKey(r));
-      if (mk) { $("#map").scrollIntoView({ behavior: "smooth", block: "center" }); mk.openPopup(); }
+      if (mk) { $("#map").scrollIntoView({ behavior: "smooth", block: "center" });
+                if (!S.layer.hasLayer(mk)) mk.addTo(S.layer); mk.openPopup(); }
     });
   }
   box.append(svg);
@@ -503,14 +600,57 @@ function uplotAxes(yLabel) {
   return [{ ...c }, { ...c, label: yLabel, size: 56 }];
 }
 
-function makePlot(target, data, series, yLabel, height = 230) {
+function makePlot(target, data, series, yLabel, height = 230, extra = {}) {
   const box = $(target);
   box.replaceChildren();
   if (!data[0].length) { box.append(el("div", { className: "empty", textContent: "Sin datos" })); return; }
   const u = new uPlot({ width: box.clientWidth, height, axes: uplotAxes(yLabel), scales: { x: { time: true } },
-                        cursor: { points: { size: 8 } },
-                        series: [{ label: "Hora", value: (u, t) => (t == null ? "—" : fmtTime(t)) }, ...series] }, data, box);
+                        ...extra, cursor: { points: { size: 8 }, ...(extra.cursor || {}) },
+                        series: [{ label: "Hora", value: (u, t) => (t == null ? "—" : fmtTimeS(t)) }, ...series] }, data, box);
   S.plots.push(u);
+}
+
+// Gráficas del trayecto con el cursor compartido: la línea vertical se mueve en todas a la vez y una
+// pelotita marca en el mapa dónde estaba el barco en ese instante (trama más cercana en el tiempo).
+const fmtTimeS = (t) => `${fmtTime(t)}:${String(new Date(t * 1000).getSeconds()).padStart(2, "0")}`;
+const tripSync = () => ({ cursor: { sync: { key: "trip", setSeries: false } },
+                          hooks: { setCursor: [(u) => moveBall(u.cursor.idx == null ? null : u.data[0][u.cursor.idx])] } });
+function moveBall(t) {
+  if (!S.map) return;
+  const rows = S.ballRows || [];
+  if (t == null || !rows.length) { if (S.ball) S.ball.remove(); return; }
+  let lo = 0, hi = rows.length - 1;                       // búsqueda binaria de la trama más cercana
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (rows[m].t < t) lo = m; else hi = m; }
+  const r = Math.abs(rows[lo].t - t) <= Math.abs(rows[hi].t - t) ? rows[lo] : rows[hi];
+  if (!S.ball) S.ball = L.marker([r.lat, r.lon], { icon: L.divIcon({ className: "ball", iconSize: [18, 18], iconAnchor: [9, 9] }),
+                                                   interactive: false, keyboard: false, zIndexOffset: 2000 });
+  S.ball.setLatLng([r.lat, r.lon]);
+  if (!S.map.hasLayer(S.ball)) S.ball.addTo(S.map);
+}
+
+// Entorno a lo largo del trayecto (una gráfica por magnitud, mismo eje de tiempo que la potencia)
+function renderEnvCharts(rows) {
+  const has = rows.some((r) => envOf(r));
+  const ids = ["#c-env-wave", "#c-env-curr", "#c-env-wind", "#c-env-temp", "#c-env-refr", "#c-env-dist"];
+  const x = rows.map((r) => r.t), E = rows.map((r) => envOf(r) || {});
+  const col = (f) => E.map((e, i) => { const v = f(e, rows[i]); return v == null || Number.isNaN(v) ? null : v; });
+  const opt = tripSync();
+  makePlot("#c-env-dist", [x, col((e, r) => r.dist_km)], [ser("Distancia", "--s1", " km")], "km", 190, opt);
+  if (!has) {
+    const msg = S.envDays.get(dayOfT(rows.length ? rows[0].t : 0)) === false || !rows.length
+      ? "Entorno de este día aún no publicado (se calcula cada día a las 06:10 UTC)" : "Sin datos de entorno";
+    for (const id of ids.slice(0, -1)) $(id).replaceChildren(el("div", { className: "empty", textContent: msg }));
+    return;
+  }
+  makePlot("#c-env-wave", [x, col((e) => e.hm0_m), col((e) => e.costa_swell_hm0_m)],
+           [ser("Altura de ola", "--s1", " m"), ser("Mar de fondo", "--s2", " m")], "m", 190, opt);
+  makePlot("#c-env-curr", [x, col((e) => (e.corr_vel_ms == null ? null : e.corr_vel_ms * 100))],
+           [ser("Corriente", "--s1", " cm/s")], "cm/s", 190, opt);
+  makePlot("#c-env-wind", [x, col((e) => e.viento_ms), col((e) => e.rafaga_ms)],
+           [ser("Viento", "--s1", " m/s"), ser("Ráfaga", "--s2", " m/s")], "m/s", 190, opt);
+  makePlot("#c-env-temp", [x, col((e) => e.temp_agua_c), col((e) => e.temp_aire_c)],
+           [ser("Agua", "--s1", " °C"), ser("Aire", "--s2", " °C")], "°C", 190, opt);
+  makePlot("#c-env-refr", [x, col((e) => e.k)], [ser("Factor k", "--s1", "")], "k", 190, opt);
 }
 
 function renderTimeChart(rows) {
@@ -518,7 +658,9 @@ function renderTimeChart(rows) {
   const ser = (label, v) => ({ label, stroke: cssVar(v), paths: () => null, points: pt(v),
                                value: (u, x) => (x == null ? "—" : `${x.toFixed(1)} dBFS`) });
   makePlot("#c-time", [rows.map((r) => r.t), rows.map((r) => (r.ch === "A" ? r.p : null)), rows.map((r) => (r.ch === "B" ? r.p : null))],
-           [ser("Canal A", "--s1"), ser("Canal B", "--s2")], "dBFS");
+           [ser("Canal A", "--s1"), ser("Canal B", "--s2")], "dBFS", 230, tripSync());
+  S.ballRows = rows.filter((r) => r.lat != null);
+  renderEnvCharts(rows);
 }
 
 function renderMapTab() {
@@ -569,6 +711,162 @@ function downloadCSV(rows, name) {
   document.body.append(a); a.click(); a.remove();
 }
 
+// ---------------------------------------------------------------- pestaña Mar y meteorología
+// Series con relojes distintos (modelo cada hora, boya cada 30 min, METAR…) → un eje común con huecos
+function joinSeries(list) {
+  const xs = [...new Set(list.flatMap(([t]) => t))].sort((a, b) => a - b);
+  const idx = new Map(xs.map((t, i) => [t, i]));
+  return [xs, ...list.map(([t, v]) => { const o = new Array(xs.length).fill(null); t.forEach((ti, k) => { o[idx.get(ti)] = v[k] ?? null; }); return o; })];
+}
+const ser = (label, color, unit, extra = {}) => ({ label, stroke: color.startsWith("--") ? cssVar(color) : color, width: 2,
+  spanGaps: true, points: { show: false }, value: (u, y) => (y == null ? "—" : `${Math.abs(y) >= 100 ? y.toFixed(0) : y.toFixed(Math.abs(y) < 10 ? 2 : 1)}${unit}`), ...extra });
+const dots = (label, color, unit) => ser(label, color, unit, { paths: () => null, points: { show: true, size: 9, fill: cssVar(color), stroke: cssVar(color) } });
+const dashed = (label, unit) => ser(label, "--muted", unit, { width: 1, dash: [5, 5] });
+const utcT = (s) => Date.parse(s.length <= 16 ? s + ":00Z" : s) / 1000;
+
+function renderMeteo() {
+  S.plots.forEach((u) => u.destroy());
+  S.plots = [];
+  const day = S.day, atm = S.atm.get(day);
+  const d0 = Date.parse(`${day}T00:00:00Z`) / 1000;
+  const boya = [...S.meteo.values()].filter((r) => r.t >= d0 && r.t < d0 + 86400).sort((a, b) => a.t - b.t);
+  const H = atm ? atm.horario : [];
+  const hx = H.map((h) => utcT(h.utc));
+  const met = atm ? atm.metar : [];
+  const lelc = met.filter((m) => m.estacion === "LELC"), lemi = met.filter((m) => m.estacion === "LEMI");
+  const sondes = atm ? atm.radiosondeos : [];
+  const bt = boya.map((r) => r.t);
+  const envDay = [...S.env.values()].filter((e) => dayOfT(e.t) === day);
+  const med = (a) => { const v = a.filter((x) => x != null).sort((x, y) => x - y); return v.length ? v[Math.floor(v.length / 2)] : null; };
+  const vals = (k) => H.map((h) => h[k]).filter((v) => v != null);
+
+  $("#meteo-note").textContent = atm
+    ? `Día ${day} (UTC). Modelo: ${atm.modelo}, perfil en ${atm.punto_ref.join(", ")}; radiosondeo de Murcia (08430, ~50 km tierra adentro);`
+      + ` METAR de San Javier (LELC) y Murcia (LEMI); boya de Cartagena (PORTUS 1612).`
+      + (atm.avisos && atm.avisos.length ? `\nAvisos: ${atm.avisos.join(" · ")}` : "")
+    : `Día ${day}: la atmósfera (modelo, radiosondeos, METAR) aún no está publicada; se calcula cada día a las 06:10 UTC para el día anterior.`
+      + (boya.length ? " Abajo, solo la boya de Cartagena." : "");
+
+  const ducts = sondes.flatMap((s) => s.conductos.map((c) => ({ ...c, s })));
+  const big = ducts.filter((c) => c.espesor_m >= 100);
+  const tiles = [
+    ["Oleaje (boya)", boya.length ? `${fmt1(Math.max(...boya.map((r) => r.hm0_m ?? 0)))} m` : "—",
+      boya.length ? `Hm0 máx. · Tp mediana ${fmt1(med(boya.map((r) => r.tp_s)))} s` : "sin datos de la boya"],
+    ["Viento (boya)", boya.length ? `${fmt1(med(boya.map((r) => r.wind_ms)))} m/s` : "—", "mediana del día"],
+    ["Agua (modelo)", envDay.length ? `${fmtN(med(envDay.map((e) => e.temp_agua_c)), 1, " °C")}` : "—",
+      envDay.length ? `mediana en las tramas · corriente ${fmtN(med(envDay.map((e) => (e.corr_vel_ms == null ? null : e.corr_vel_ms * 100))), 0, " cm/s")}` : "sin tramas con entorno"],
+    ["dN/dh 0–1 km", vals("dndh_1km").length ? `${fmt1(med(vals("dndh_1km")))} N/km` : "—",
+      vals("dndh_1km").length ? `mediana · mín. ${fmt1(Math.min(...vals("dndh_1km")))} (−40 = estándar)` : ""],
+    ["Factor k", vals("k").length ? fmtN(med(vals("k")), 2) : "—",
+      vals("k").length ? `${fmtN(Math.min(...vals("k")), 2)}–${fmtN(Math.max(...vals("k")), 2)} (4/3 = estándar)` : ""],
+    ["Conductos (sondeo)", sondes.length ? String(ducts.length) : "—",
+      sondes.length ? (big.length ? `${big.length} de ≥ 100 m (pueden atrapar 162 MHz)` : "ninguno ≥ 100 m: no atrapan a 162 MHz") : "sin radiosondeo"],
+  ];
+  $("#m-tiles").replaceChildren(...tiles.map(([l, v, s2]) => el("div", { className: "tile" },
+    el("div", { className: "label", textContent: l }), el("div", { className: "value", textContent: v }),
+    el("div", { className: "sub", textContent: s2 }))));
+
+  const sonde = (k) => [sondes.map((s) => utcT(s.lanzamiento_utc)), sondes.map((s) => s[k])];
+  makePlot("#c-wave", joinSeries([[bt, boya.map((r) => r.hm0_m)], [bt, boya.map((r) => r.hmax_m)]]),
+           [ser("Hm0", "--s1", " m"), ser("Hmax", "--s2", " m")], "m", 220);
+  makePlot("#c-tp", joinSeries([[bt, boya.map((r) => r.tp_s)], [bt, boya.map((r) => r.tm02_s)]]),
+           [ser("Tp", "--s1", " s"), ser("Tm02", "--s2", " s")], "s", 220);
+  makePlot("#c-wdir", joinSeries([[bt, boya.map((r) => r.wave_dir_deg)], [bt, boya.map((r) => r.wind_dir_deg)]]),
+           [dots("Oleaje (viene del)", "--s1", "°"), dots("Viento (viene del)", "--s2", "°")], "grados", 220);
+  makePlot("#c-wind", joinSeries([[bt, boya.map((r) => r.wind_ms)], [hx, H.map((h) => h.viento_ms)],
+                                  [lelc.map((m) => utcT(m.utc)), lelc.map((m) => (m.viento_kn == null ? null : m.viento_kn * 0.5144))]]),
+           [ser("Boya", "--s1", " m/s"), ser("Modelo", "--s2", " m/s"), ser("San Javier", "--s3", " m/s")], "m/s", 220);
+  makePlot("#c-dndh", joinSeries([[hx, H.map((h) => h.dndh_1km)], sonde("dndh_1km"), [hx, hx.map(() => -79)], [hx, hx.map(() => -157)]]),
+           [ser("Modelo (0–1 km)", "--s1", " N/km"), dots("Radiosondeo", "--s2", " N/km"),
+            dashed("super (−79)", ""), dashed("conducto (−157)", "")], "N/km", 220);
+  makePlot("#c-k", joinSeries([[hx, H.map((h) => h.k)], sonde("k"), [hx, hx.map(() => 4 / 3)]]),
+           [ser("Modelo", "--s1", ""), dots("Radiosondeo", "--s2", ""), dashed("estándar (4/3)", "")], "k", 220);
+  makePlot("#c-nsup", [hx, H.map((h) => h.n_sup)], [ser("N en superficie", "--s1", " N")], "N", 220);
+  makePlot("#c-tair", joinSeries([[hx, H.map((h) => h.t2m_c)], [hx, H.map((h) => h.td2m_c)], [bt, boya.map((r) => r.air_temp_c)],
+                                  [lelc.map((m) => utcT(m.utc)), lelc.map((m) => m.t_c)]]),
+           [ser("T aire (modelo)", "--s1", " °C"), ser("Rocío (modelo)", "--s3", " °C"), ser("T aire (boya)", "--s2", " °C"),
+            dots("T San Javier", "--ink-2", " °C")], "°C", 220);
+  makePlot("#c-press", joinSeries([[hx, H.map((h) => h.p_sup_hpa)], [bt, boya.map((r) => r.pressure_mb)],
+                                   [lelc.map((m) => utcT(m.utc)), lelc.map((m) => m.p_hpa)]]),
+           [ser("Modelo", "--s1", " hPa"), ser("Boya", "--s2", " hPa"), dots("San Javier (QNH)", "--s3", " hPa")], "hPa", 220);
+  makePlot("#c-rad", [hx, H.map((h) => h.radiacion_wm2)], [ser("Radiación solar", "--s1", " W/m²")], "W/m²", 220);
+  makePlot("#c-cloud", [hx, H.map((h) => h.nubosidad_pct), H.map((h) => h.nubes_bajas_pct)],
+           [ser("Nubosidad total", "--s1", " %"), ser("Nubes bajas", "--s2", " %")], "%", 220);
+  makePlot("#c-blh", [hx, H.map((h) => h.capa_limite_m)], [ser("Capa límite (GFS)", "--s1", " m")], "m", 220);
+  renderSonde(sondes);
+  renderMetar(met);
+}
+
+// Perfiles M(h) de los radiosondeos (0–3 km) con los conductos sombreados
+function renderSonde(sondes) {
+  const v = $("#sonde-var").value;                  // "m" (modificada) o "n"
+  const box = $("#c-sonde");
+  box.replaceChildren();
+  if (!sondes.length) { box.append(el("div", { className: "empty", textContent: "Sin radiosondeos este día" })); $("#t-ducts").replaceChildren(); return; }
+  const cols = ["--s1", "--s2"];
+  box.append(el("div", { className: "legend" }, ...sondes.map((s, i) =>
+    el("span", {}, el("span", { className: "key", style: `background:${cssVar(cols[i % 2])}` }),
+       `${s.nominal_utc.slice(11, 16)} UTC (lanzado ${s.lanzamiento_utc.slice(11, 16)})`))));
+  const W = box.clientWidth, Hh = 380, m = { l: 52, r: 12, t: 10, b: 34 };
+  const pts = sondes.flatMap((s) => s.perfil.filter((q) => q[v] != null));
+  const x0 = Math.floor(Math.min(...pts.map((q) => q[v])) / 10) * 10, x1 = Math.ceil(Math.max(...pts.map((q) => q[v])) / 10) * 10;
+  const y0 = 0, y1 = 3000;
+  const X = (v) => m.l + ((v - x0) / (x1 - x0)) * (W - m.l - m.r);
+  const Y = (v) => m.t + ((y1 - v) / (y1 - y0)) * (Hh - m.t - m.b);
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("width", W); svg.setAttribute("height", Hh); svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `Refractividad ${v === "m" ? "modificada M" : "N"} frente a la altura en los radiosondeos de Murcia`);
+  const add = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    if (text != null) e.textContent = text; svg.append(e); return e; };
+  const ink = cssVar("--ink-2"), grid = cssVar("--grid");
+  sondes.forEach((s, i) => s.conductos.forEach((c) => add("rect", { x: m.l, width: W - m.l - m.r, y: Y(c.tope_m), height: Math.max(1, Y(c.base_m) - Y(c.tope_m)),
+    fill: cssVar(cols[i % 2]), "fill-opacity": c.espesor_m >= 100 ? 0.28 : 0.12 })));
+  for (let v = 0; v <= y1; v += 500) {
+    add("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: grid });
+    add("text", { x: m.l - 6, y: Y(v) + 4, "text-anchor": "end", fill: ink, "font-size": 12 }, v);
+  }
+  const xstep = (x1 - x0) > 300 ? 100 : (x1 - x0) > 120 ? 50 : 20;
+  for (let v = Math.ceil(x0 / xstep) * xstep; v <= x1; v += xstep) {
+    add("line", { x1: X(v), x2: X(v), y1: m.t, y2: Hh - m.b, stroke: grid });
+    add("text", { x: X(v), y: Hh - m.b + 16, "text-anchor": "middle", fill: ink, "font-size": 12 }, v);
+  }
+  add("text", { x: W - m.r, y: Hh - 4, "text-anchor": "end", fill: ink, "font-size": 12 }, v === "m" ? "M (unidades M)" : "N (unidades N)");
+  add("text", { x: 4, y: 12, fill: ink, "font-size": 12 }, "m");
+  sondes.forEach((s, i) => add("polyline", { points: s.perfil.filter((q) => q[v] != null).map((q) => `${X(q[v])},${Y(q.z_m)}`).join(" "),
+    fill: "none", stroke: cssVar(cols[i % 2]), "stroke-width": 2 }));
+  svg.addEventListener("pointermove", (ev) => {
+    const r = svg.getBoundingClientRect(), z = y1 - ((ev.clientY - r.top - m.t) / (Hh - m.t - m.b)) * (y1 - y0);
+    tip(ev, sondes.map((s) => { const q = s.perfil.reduce((a, b) => (Math.abs(b.z_m - z) < Math.abs(a.z_m - z) ? b : a));
+      return [`${q.z_m.toFixed(0)} m: M ${fmt1(q.m)} · N ${fmt1(q.n)}`, `T ${fmt1(q.t_c)} °C, Td ${fmt1(q.td_c)} °C (${s.nominal_utc.slice(11, 16)})`]; }));
+  });
+  svg.addEventListener("pointerleave", () => ($("#tip").hidden = true));
+  box.append(svg);
+  const head = el("tr", {}, ...["Sondeo", "Tipo", "Base–tope", "Espesor", "ΔM", "¿Atrapa 162 MHz?"].map((h, i) =>
+    el("th", { textContent: h, className: i >= 3 && i < 5 ? "num" : "" })));
+  const rows = sondes.flatMap((s) => s.conductos.map((c) => el("tr", {},
+    el("td", { textContent: `${s.nominal_utc.slice(11, 16)} UTC` }), el("td", { textContent: c.tipo }),
+    el("td", { textContent: `${c.base_m}–${c.tope_m} m` }), el("td", { className: "num", textContent: `${c.espesor_m} m` }),
+    el("td", { className: "num", textContent: fmt1(c.dm) }),
+    el("td", { textContent: c.espesor_m >= 100 ? "posible (≥ 100 m)" : "no (demasiado fino)" }))));
+  $("#t-ducts").replaceChildren(el("thead", {}, head), el("tbody", {}, ...(rows.length ? rows
+    : [el("tr", {}, el("td", { colSpan: 6, textContent: "Sin conductos en los radiosondeos de este día" }))])));
+}
+
+function renderMetar(met) {
+  const head = el("tr", {}, ...["Hora (UTC)", "Estación", "T", "Td", "QNH", "Viento", "Visib."].map((h, i) =>
+    el("th", { textContent: h, className: i >= 2 ? "num" : "" })));
+  const rows = met.map((m) => el("tr", {}, el("td", { textContent: m.utc.slice(11, 16) }),
+    el("td", { textContent: m.estacion === "LELC" ? "San Javier" : m.estacion === "LEMI" ? "Murcia" : m.estacion }),
+    el("td", { className: "num", textContent: fmtN(m.t_c, 0, " °C") }), el("td", { className: "num", textContent: fmtN(m.td_c, 0, " °C") }),
+    el("td", { className: "num", textContent: fmtN(m.p_hpa, 0, " hPa") }),
+    el("td", { className: "num", textContent: m.viento_kn == null ? "—" : `${m.viento_kn} kn ${m.dir_deg == null ? "var." : "del " + m.dir_deg + "°"}` }),
+    el("td", { className: "num", textContent: fmtN(m.vis_km, 0, " km") })));
+  $("#t-metar").replaceChildren(el("thead", {}, head), el("tbody", {}, ...(rows.length ? rows
+    : [el("tr", {}, el("td", { colSpan: 7, textContent: "Sin METAR" }))])));
+  $("#metar-n").textContent = `(${met.length} partes)`;
+}
+
 // ---------------------------------------------------------------- pestaña Estado
 function renderEstado() {
   S.plots.forEach((u) => u.destroy());
@@ -597,11 +895,6 @@ function renderEstado() {
   makePlot("#c-temp", [x, b.map((r) => r.temp)], [line("Temperatura", "--s1", " °C")], "°C", 220);
   makePlot("#c-ref", [x, b.map((r) => r.refA ?? null), b.map((r) => r.refB ?? null)],
            [line("Canal A", "--s1", " dBFS"), line("Canal B", "--s2", " dBFS")], "dBFS", 220);
-  const d0 = Date.parse(`${S.day}T00:00:00Z`) / 1000;
-  const m = [...S.meteo.values()].filter((r) => r.t >= d0 && r.t < d0 + 86400).sort((a, b) => a.t - b.t);
-  makePlot("#c-wave", [m.map((r) => r.t), m.map((r) => r.hm0_m), m.map((r) => r.hmax_m)],
-           [line("Hm0", "--s1", " m"), line("Hmax", "--s2", " m")], "m", 220);
-  makePlot("#c-wind", [m.map((r) => r.t), m.map((r) => r.wind_ms)], [line("Viento", "--s1", " m/s")], "m/s", 220);
 
   const head = el("tr", {}, ...["Día (UTC)", "Trayectos", "Tramas en mov.", "Barcos", "En movimiento", ""].map((h, i) =>
     el("th", { textContent: h, className: i && i < 5 ? "num" : "" })));
@@ -616,11 +909,11 @@ function renderEstado() {
 }
 
 // ---------------------------------------------------------------- orquestación
-function current() { return location.hash === "#estado" ? "estado" : "mapa"; }
+function current() { return { "#estado": "estado", "#meteo": "meteo" }[location.hash] || "mapa"; }
 
 function showTab(name) {
   if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
-  for (const t of ["mapa", "estado"]) {
+  for (const t of ["mapa", "meteo", "estado"]) {
     $(`#tab-${t}`).setAttribute("aria-selected", String(t === name));
     $(`#p-${t}`).hidden = t !== name;
   }
@@ -633,6 +926,8 @@ function render() {
     if (!S.map) initMap();
     S.map.invalidateSize();          // antes de encuadrar: si el mapa estaba oculto, su tamaño era 0
     renderMapTab();
+  } else if (current() === "meteo") {
+    renderMeteo();
   } else {
     renderEstado();
   }
@@ -673,6 +968,8 @@ async function init() {
   $("#search").addEventListener("input", () => { renderTripList(); renderMap(); });
   $("#tab-mapa").addEventListener("click", () => showTab("mapa"));
   $("#tab-estado").addEventListener("click", () => showTab("estado"));
+  $("#tab-meteo").addEventListener("click", () => showTab("meteo"));
+  $("#sonde-var").addEventListener("change", () => renderSonde((S.atm.get(S.day) || {}).radiosondeos || []));
   $("#dl-trip").addEventListener("click", () => {
     const rows = S.ship ? S.shipRows : S.rows;
     if (S.sel) downloadCSV(rows.filter((r) => r.trip === S.sel), `${S.sel}.csv`);

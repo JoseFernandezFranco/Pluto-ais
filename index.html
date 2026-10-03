@@ -20,6 +20,7 @@
 
 <nav class="tabs" role="tablist">
   <button role="tab" id="tab-mapa" aria-controls="p-mapa" aria-selected="true">Mapa de trayectos</button>
+  <button role="tab" id="tab-meteo" aria-controls="p-meteo" aria-selected="false">Mar y meteorología</button>
   <button role="tab" id="tab-estado" aria-controls="p-estado" aria-selected="false">Estado del PC</button>
 </nav>
 
@@ -51,6 +52,7 @@
       </aside>
       <div class="card map-card">
         <div id="map"></div>
+        <div id="arrow-ctl" class="arrow-ctl" hidden></div>
         <div id="fleet-legend" class="legend fleet-legend" aria-label="Tipos de barco"></div>
         <div id="map-legend" class="ramp-legend"></div>
       </div>
@@ -70,10 +72,59 @@
         <div><h3>Potencia frente a distancia</h3><div id="c-dist" class="chart"></div></div>
         <div><h3>Potencia a lo largo del trayecto</h3><div id="c-time" class="chart"></div></div>
       </div>
+      <p class="note">Pasa el cursor por una gráfica de tiempo: la línea se mueve en todas y la pelotita blanca del mapa marca dónde estaba el barco.</p>
+      <div class="grid env-grid">
+        <div><h3>Distancia al receptor</h3><div id="c-env-dist" class="chart small-chart"></div></div>
+        <div><h3>Altura de ola y mar de fondo</h3><div id="c-env-wave" class="chart small-chart"></div></div>
+        <div><h3>Corriente</h3><div id="c-env-curr" class="chart small-chart"></div></div>
+        <div><h3>Viento y ráfaga</h3><div id="c-env-wind" class="chart small-chart"></div></div>
+        <div><h3>Temperatura del agua y del aire</h3><div id="c-env-temp" class="chart small-chart"></div></div>
+        <div><h3>Factor k (refracción)</h3><div id="c-env-refr" class="chart small-chart"></div></div>
+      </div>
     </section>
   </section>
 
-  <!-- Pestaña 2: estado del PC de captura -->
+  <!-- Pestaña 2: mar y meteorología del día (lo que no va por trama) -->
+  <section id="p-meteo" role="tabpanel" aria-labelledby="tab-meteo" hidden>
+    <p class="note" id="meteo-note"></p>
+    <section class="tiles" id="m-tiles" aria-label="Resumen del día"></section>
+    <h2 class="group">Mar <span class="muted small">(boya de Cartagena, PORTUS 1612, 7 km al S)</span></h2>
+    <div class="grid">
+      <section class="card"><h2>Altura de ola</h2><div id="c-wave" class="chart"></div></section>
+      <section class="card"><h2>Periodo del oleaje</h2><div id="c-tp" class="chart"></div></section>
+      <section class="card"><h2>Direcciones <span class="muted small">(de dónde vienen)</span></h2><div id="c-wdir" class="chart"></div></section>
+    </div>
+    <h2 class="group">Aire <span class="muted small">(modelo ICON-EU frente a Cartagena, boya y METAR de San Javier)</span></h2>
+    <div class="grid">
+      <section class="card"><h2>Viento</h2><div id="c-wind" class="chart"></div></section>
+      <section class="card"><h2>Temperatura y punto de rocío</h2><div id="c-tair" class="chart"></div></section>
+      <section class="card"><h2>Presión</h2><div id="c-press" class="chart"></div></section>
+      <section class="card"><h2>Radiación solar</h2><div id="c-rad" class="chart"></div></section>
+      <section class="card"><h2>Nubosidad</h2><div id="c-cloud" class="chart"></div></section>
+      <section class="card"><h2>Altura de la capa límite <span class="muted small">(GFS)</span></h2><div id="c-blh" class="chart"></div></section>
+    </div>
+    <h2 class="group">Refracción <span class="muted small">(ITU-R P.453; normal: dN/dh ≈ −40 N/km, k ≈ 4/3)</span></h2>
+    <div class="grid">
+      <section class="card"><h2>Gradiente dN/dh (0–1 km)</h2><div id="c-dndh" class="chart"></div></section>
+      <section class="card"><h2>Factor de radio terrestre efectivo k</h2><div id="c-k" class="chart"></div></section>
+      <section class="card"><h2>Refractividad en superficie</h2><div id="c-nsup" class="chart"></div></section>
+    </div>
+    <section class="card">
+      <div class="card-head">
+        <h2>Radiosondeos de Murcia <span class="muted small">(cada 10 m; franjas = conductos, más intensas si tienen ≥ 100 m, lo que hace falta para atrapar 162 MHz)</span></h2>
+        <label class="small">Perfil <select id="sonde-var"><option value="m">M (modificada: conductos donde baja)</option>
+          <option value="n">N (refractividad)</option></select></label>
+      </div>
+      <div id="c-sonde" class="chart"></div>
+      <div class="table-wrap"><table id="t-ducts"></table></div>
+    </section>
+    <section class="card">
+      <details><summary><h2 class="inline">METAR <span class="muted small" id="metar-n"></span></h2></summary>
+        <div class="table-wrap"><table id="t-metar"></table></div></details>
+    </section>
+  </section>
+
+  <!-- Pestaña 3: estado del PC de captura -->
   <section id="p-estado" role="tabpanel" aria-labelledby="tab-estado" hidden>
     <section class="tiles" id="tiles" aria-label="Resumen del estado"></section>
     <div class="grid">
@@ -82,8 +133,6 @@
       <section class="card"><h2>Ruido de canal (dBFS, mediana cada 10 min)</h2><div id="c-noise" class="chart"></div></section>
       <section class="card"><h2>Temperatura del AD9363 (°C)</h2><div id="c-temp" class="chart"></div></section>
       <section class="card"><h2>Potencia de la estación base <span class="muted small">(transmisor fijo a 3 km: referencia)</span></h2><div id="c-ref" class="chart"></div></section>
-      <section class="card"><h2>Oleaje <span class="muted small">(boya de Cartagena, PORTUS)</span></h2><div id="c-wave" class="chart"></div></section>
-      <section class="card"><h2>Viento <span class="muted small">(boya de Cartagena, PORTUS)</span></h2><div id="c-wind" class="chart"></div></section>
     </div>
     <section class="card">
       <h2>Días publicados</h2>

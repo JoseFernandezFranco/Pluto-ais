@@ -31,6 +31,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 header, .tabs, .filters, main, footer { max-width: 1400px; margin: 0 auto; padding: 0 16px; }
 header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding-top: 16px; }
@@ -134,3 +135,24 @@ button.small { font-size: 12px; padding: 2px 8px; }
 .pt-card th { color: #52514e; font-weight: 400; padding-right: 8px; width: 42%; }
 .pt-card td { font-variant-numeric: tabular-nums; }
 .pt-none, .pt-src { color: #52514e; margin: 8px 0 0; }
+
+/* Flechas de dirección (mapa) */
+.arrow-ic { background: none; border: 0; }
+.arrow-ctl { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-top: 8px; font-size: 12px; color: var(--ink-2); }
+.arrow-title { font-weight: 600; color: var(--ink); }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); cursor: pointer; }
+.chip input[type="checkbox"] { margin: 0; }
+.chip input[type="range"] { width: 90px; padding: 0; border: 0; background: none; }
+.arrow-sw { display: inline-flex; background: #1a1a19; border-radius: 4px; }
+.arrow-sw svg { display: block; }
+
+/* Mar y meteorología */
+h2.group { margin: 16px 0 8px; font-size: 15px; }
+h2.inline { display: inline; }
+summary { cursor: pointer; }
+
+/* Gráficas del trayecto + pelotita en el mapa */
+.env-grid { margin-top: 4px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
+.small-chart { min-height: 200px; }
+.ball { background: #ffffff; border: 3px solid #0b0b0b; border-radius: 50%; box-shadow: 0 0 0 3px rgba(255, 255, 255, .55), 0 1px 6px rgba(0, 0, 0, .6); }
