@@ -7,7 +7,7 @@
 <meta name="description" content="Potencia recibida (RSSI) de cada trama AIS de los barcos en movimiento, con su trayectoria. ADALM-Pluto, UPCT.">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=1791025222">
 </head>
 <body>
 <header>
@@ -52,6 +52,7 @@
       </aside>
       <div class="card map-card">
         <div id="map"></div>
+        <div id="env-banner" class="env-banner" role="status" hidden></div>
         <div id="arrow-ctl" class="arrow-ctl" hidden></div>
         <div id="fleet-legend" class="legend fleet-legend" aria-label="Tipos de barco"></div>
         <div id="map-legend" class="ramp-legend"></div>
@@ -80,6 +81,7 @@
         <div><h3>Viento y ráfaga</h3><div id="c-env-wind" class="chart small-chart"></div></div>
         <div><h3>Temperatura del agua y del aire</h3><div id="c-env-temp" class="chart small-chart"></div></div>
         <div><h3>Factor k (refracción)</h3><div id="c-env-refr" class="chart small-chart"></div></div>
+        <div><h3>Altura de la capa límite <span class="muted small">(GFS, frente a Cartagena)</span></h3><div id="c-env-blh" class="chart small-chart"></div></div>
       </div>
     </section>
   </section>
@@ -147,12 +149,12 @@
   </section>
 </main>
 <footer class="muted small">Potencias en dBFS (sin calibrar a dBm), ruido restado. Posición: «trama» = la del propio mensaje;
-  «interp.» = interpolada entre informes del barco. Se publica cada 15 min. Clic en un punto del trayecto: mar, agua, aire
+  «interp.» = interpolada entre informes del barco. Se publica cada 15 min. Clic en una flecha (o punto) del trayecto: mar, agua, aire
   y refracción en ese punto e instante (modelos de Puertos del Estado, ICON-EU; se añade cada día a las 06:10 UTC).</footer>
 <div id="tip" class="tip" hidden></div>
 
 <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=1791025222"></script>
 </body>
 </html>

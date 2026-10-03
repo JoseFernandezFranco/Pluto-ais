@@ -156,3 +156,5 @@ summary { cursor: pointer; }
 .env-grid { margin-top: 4px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
 .small-chart { min-height: 200px; }
 .ball { background: #ffffff; border: 3px solid #0b0b0b; border-radius: 50%; box-shadow: 0 0 0 3px rgba(255, 255, 255, .55), 0 1px 6px rgba(0, 0, 0, .6); }
+.env-banner { margin-top: 8px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, var(--surface)); color: var(--ink); font-size: 13px; }

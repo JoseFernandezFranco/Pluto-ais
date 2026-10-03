@@ -148,6 +148,17 @@ async function ensureAtm(day) {
   if (S.atm.has(day) && S.atm.get(day) && day < recent) return;
   S.atm.set(day, await getJSON(`data/meteo/atm/${day}.json`).catch(() => null));
 }
+// Valor horario del JSON de atmósfera interpolado al instante t (las magnitudes que no van por celda)
+function atmAt(t, key) {
+  const H = ((S.atm.get(new Date(t * 1000).toISOString().slice(0, 10)) || {}).horario) || [];
+  const pts = H.map((h) => [utcT(h.utc), h[key]]).filter(([, v]) => v != null);
+  if (!pts.length) return null;
+  let i = pts.findIndex(([ht]) => ht >= t);
+  if (i === -1) return pts[pts.length - 1][1];
+  if (i === 0) return pts[0][1];
+  const [t0, v0] = pts[i - 1], [t1, v1] = pts[i];
+  return v0 + ((v1 - v0) * (t - t0)) / (t1 - t0);
+}
 const dayOfT = (t) => new Date(t * 1000).toISOString().slice(0, 10);
 const refrClass = (g) => (g == null ? "—" : g > 0 ? "subrefracción" : g >= -79 ? "normal" : g >= -157 ? "superrefracción" : "conducto");
 const fmtN = (v, nd = 1, unit = "") => (v == null || Number.isNaN(v) ? "—" : `${(+v).toFixed(nd)}${unit}`);
@@ -191,6 +202,13 @@ function arrowSVG(color, len, rot) {
 function renderArrows(hl) {
   const box = $("#arrow-ctl");
   box.hidden = !hl.length;
+  const noEnv = hl.length > 0 && !hl.some((r) => envOf(r));
+  $("#env-banner").hidden = !noEnv;
+  if (noEnv) {
+    const days = [...S.envDays].filter(([, ok]) => ok).map(([d]) => d).sort();
+    $("#env-banner").textContent = `Este día todavía no tiene datos de mar, aire y refracción: se calculan cada día a las 06:10 UTC `
+      + `(08:10 en España) para el día anterior.${days.length ? ` Días con datos: ${days.join(", ")}.` : ""}`;
+  }
   if (!hl.length) return;
   const withEnv = hl.filter((r) => envOf(r));
   const step = Math.max(1, Math.ceil(hl.length / arrowDensity));
@@ -267,6 +285,7 @@ function pointCard(r) {
     sec("Aire (ICON-EU)", [["Viento", `${fmtN(e.viento_ms, 1, " m/s")} del ${fmtN(e.viento_dir_deg, 0, "°")}`], ["Ráfaga", fmtN(e.rafaga_ms, 1, " m/s")],
       ["Temperatura", fmtN(e.temp_aire_c, 1, " °C")], ["Humedad", fmtN(e.humedad_pct, 0, " %")],
       ["Presión", fmtN(e.presion_hpa, 1, " hPa")],
+      ["Capa límite (GFS)", fmtN(atmAt(r.t, "capa_limite_m"), 0, " m")], ["Nubes bajas", fmtN(atmAt(r.t, "nubes_bajas_pct"), 0, " %")],
       ["Radiación solar", fmtN(e.radiacion_wm2, 0, " W/m²")], ["Nubosidad", fmtN(e.nubosidad_pct, 0, " %")]]);
     const dt = e.dt_mar_aire_c;
     sec("Refracción (ITU-R P.453)", [["N en superficie", fmtN(e.n_sup, 1, " N")],
@@ -313,7 +332,7 @@ async function loadShip(mmsi) {
   const segs = [...new Set(trips.flatMap((t) => t.segs))];
   const [parts, pparts] = await Promise.all([Promise.all(segs.map((s) => getTracks(...segURL(s)))),
                                              Promise.all(segs.map((s) => getTracks(...segURL(s, "paths")))),
-                                             ensureMeteo(days), ensureEnv(days)]);
+                                             ensureMeteo(days), ensureEnv(days), ...days.map(ensureAtm)]);
   S.shipTrips = trips.sort((a, b) => b.start - a.start);
   S.shipRows = parts.flat().filter((r) => r.mmsi === mmsi).sort((a, b) => a.t - b.t);
   S.shipPaths = pparts.flat().filter((r) => r.mmsi === mmsi).sort((a, b) => a.t - b.t);
@@ -511,7 +530,7 @@ function renderTripDetail() {
     $("#trip-note").textContent = "Selecciónalo en la lista, haz clic en su línea o en un barco del mapa (recorrido completo).";
     $("#c-dist").replaceChildren(el("div", { className: "empty", textContent: "—" }));
     $("#c-time").replaceChildren(el("div", { className: "empty", textContent: "—" }));
-    for (const id of ["#c-env-wave", "#c-env-curr", "#c-env-wind", "#c-env-temp", "#c-env-refr", "#c-env-dist"])
+    for (const id of ["#c-env-wave", "#c-env-curr", "#c-env-wind", "#c-env-temp", "#c-env-refr", "#c-env-blh", "#c-env-dist"])
       $(id).replaceChildren(el("div", { className: "empty", textContent: "—" }));
     S.ballRows = [];
     moveBall(null);
@@ -631,7 +650,7 @@ function moveBall(t) {
 // Entorno a lo largo del trayecto (una gráfica por magnitud, mismo eje de tiempo que la potencia)
 function renderEnvCharts(rows) {
   const has = rows.some((r) => envOf(r));
-  const ids = ["#c-env-wave", "#c-env-curr", "#c-env-wind", "#c-env-temp", "#c-env-refr", "#c-env-dist"];
+  const ids = ["#c-env-wave", "#c-env-curr", "#c-env-wind", "#c-env-temp", "#c-env-refr", "#c-env-blh", "#c-env-dist"];
   const x = rows.map((r) => r.t), E = rows.map((r) => envOf(r) || {});
   const col = (f) => E.map((e, i) => { const v = f(e, rows[i]); return v == null || Number.isNaN(v) ? null : v; });
   const opt = tripSync();
@@ -651,6 +670,7 @@ function renderEnvCharts(rows) {
   makePlot("#c-env-temp", [x, col((e) => e.temp_agua_c), col((e) => e.temp_aire_c)],
            [ser("Agua", "--s1", " °C"), ser("Aire", "--s2", " °C")], "°C", 190, opt);
   makePlot("#c-env-refr", [x, col((e) => e.k)], [ser("Factor k", "--s1", "")], "k", 190, opt);
+  makePlot("#c-env-blh", [x, x.map((t) => atmAt(t, "capa_limite_m"))], [ser("Capa límite", "--s1", " m")], "m", 190, opt);
 }
 
 function renderTimeChart(rows) {
