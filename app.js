@@ -42,6 +42,27 @@ const CATS = [
 const catOf = (type) => CATS.find((c) => c.re.test(type || ""));
 const kindOf = (cls) => (cls || "").startsWith("Estación") ? "base" : (cls || "").startsWith("Ayuda") ? "aton" : "ship";
 
+// Alcance teórico (mismas fórmulas que plutoais/horizonte.py; parámetros en status.propagacion):
+//  ruptura de dos rayos d_b = 4·h_t·h_r/λ y horizonte radioeléctrico d = √(2·k·R·h). Alturas s.n.m.; k opcional (del día).
+const C_LUZ = 299792458, R_TIERRA_M = 6371e3;
+const horizKm = (h, k) => Math.sqrt(2 * k * R_TIERRA_M * h) / 1000;
+function reach(catKey, k) {
+  const p = (S.status || {}).propagacion;
+  if (!p) return null;
+  const ht = p.tx_altura_m[catKey] ?? p.tx_altura_m.other, hr = p.rx_altura_m, kk = k ?? p.k_estandar;
+  return { ht, hr, k: kk, kStd: p.k_estandar, ruptura: (4 * ht * hr * p.freq_hz) / C_LUZ / 1000,
+           hTx: horizKm(ht, kk), hRx: horizKm(hr, kk), los: horizKm(ht, kk) + horizKm(hr, kk), prov: !p.rx_altura_verificada };
+}
+const medianOf = (a) => { const v = a.filter((x) => x != null).sort((x, y) => x - y); return v.length ? v[Math.floor(v.length / 2)] : null; };
+// Alcance para las tramas de UN barco (categoría por su tipo AIS, k mediano de sus tramas si hay entorno)
+function reachOfRows(rows) {
+  if (!rows.length) return null;
+  const sh = shipInfo(rows[0].mmsi);
+  if (kindOf(sh.class) !== "ship") return null;              // estación base / AtoN: altura desconocida
+  return reach(catOf(sh.type).k, medianOf(rows.map((r) => (envOf(r) || {}).k)));
+}
+const reachNote = (rc) => `h_tx ${rc.ht} m, h_rx ${rc.hr} m s.n.m.${rc.prov ? " (provisional)" : ""}`;
+
 // Icono SVG: casco orientado (en movimiento), círculo (parado), torre (estación base), rombo (AtoN)
 function iconSVG(cat, kind, moving, rot, size = 22) {
   const s = `width="${size}" height="${size}" viewBox="-11 -11 22 22"`;
@@ -393,7 +414,8 @@ function initMap() {
     { maxZoom: 19, attribution: "Imágenes © Esri, Maxar, Earthstar Geographics" });
   const osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" });
   S.map = L.map("map", { layers: [sat], scrollWheelZoom: true });
-  L.control.layers({ "Satélite": sat, "Mapa": osm }, null, { position: "topright" }).addTo(S.map);
+  S.reach = L.layerGroup().addTo(S.map);
+  L.control.layers({ "Satélite": sat, "Mapa": osm }, { "Alcance teórico (ruptura y horizonte)": S.reach }, { position: "topright" }).addTo(S.map);
   L.control.scale({ imperial: false }).addTo(S.map);
   S.layer = L.layerGroup().addTo(S.map);
   S.fleet = L.layerGroup().addTo(S.map);
@@ -437,6 +459,19 @@ function renderFleetLegend() {
              el("span", {}, iconEl(CATS[7], "base", false), "estación base"),
              el("span", {}, iconEl(CATS[7], "aton", false), "AtoN"));
   $("#fleet-legend").replaceChildren(...items);
+}
+
+// Circunferencias teóricas alrededor del receptor para el barco elegido (o un barco "otro" si no hay ninguno)
+function renderReach(rx, hl) {
+  S.reach.clearLayers();
+  if (rx.lat == null) return;
+  const rc = hl.length ? reachOfRows(hl) : reach("other");
+  if (!rc) return;
+  const who = hl.length ? "" : " · barco de referencia (otro, sin elegir)";
+  for (const [km, color, text] of [[rc.ruptura, "#ffd166", `Ruptura de dos rayos: ${rc.ruptura.toFixed(2)} km`],
+                                   [rc.los, "#4da3ff", `Horizonte radioeléctrico: ${rc.los.toFixed(1)} km (k ${rc.k.toFixed(2)})`]])
+    L.circle([rx.lat, rx.lon], { radius: km * 1000, color, weight: 2, dashArray: "8 8", fill: false })
+      .bindTooltip(el("div", { textContent: `${text} · ${reachNote(rc)}${who}` }), { sticky: true }).addTo(S.reach);
 }
 
 function renderMap() {
@@ -490,6 +525,7 @@ function renderMap() {
     S.markers.set(envKey(r), mk);
   }
   renderArrows(hl);
+  renderReach(rx, hl);
   if (rx.lat != null) {
     L.circleMarker([rx.lat, rx.lon], { radius: 7, color: "#ffffff", weight: 2, fillColor: "#0b0b0b", fillOpacity: 1 })
       .bindTooltip(el("div", { textContent: `Receptor · ${rx.name || ""}` })).addTo(S.layer);
@@ -558,6 +594,12 @@ function renderDistChart(rows) {
   if (!d.length) { box.append(el("div", { className: "empty", textContent: "Sin posiciones" })); return; }
   box.append(el("div", { className: "legend" }, ...[["A", "--s1"], ["B", "--s2"]].map(([c, v]) =>
     el("span", {}, el("span", { className: "key", style: `background:${cssVar(v)}` }), `Canal ${c}`))));
+  const rc = reachOfRows(d);
+  if (rc) box.firstChild.append(
+    el("span", {}, el("span", { className: "key dash", style: "border-color:#d99a00" }),
+      `Ruptura de dos rayos ${rc.ruptura.toFixed(2)} km (${reachNote(rc)})`),
+    el("span", {}, el("span", { className: "key dash", style: "border-color:#2a78d6" }),
+      `Horizonte radioeléctrico ${rc.los.toFixed(1)} km (k ${rc.k.toFixed(2)}${rc.k === rc.kStd ? ", estándar" : ""})`));
   const W = box.clientWidth, H = 240, m = { l: 52, r: 12, t: 22, b: 34 };
   const xs = d.map((r) => r.dist_km), ys = d.map((r) => r.p);
   const x0 = Math.max(0, Math.floor(Math.min(...xs) * 10) / 10 - 0.1), x1 = Math.ceil(Math.max(...xs) * 10) / 10 + 0.1;
@@ -587,6 +629,14 @@ function renderDistChart(rows) {
   }
   add("text", { x: W - m.r, y: H - 4, "text-anchor": "end", fill: ink, "font-size": 12 }, "distancia al receptor (km)");
   add("text", { x: 4, y: 12, fill: ink, "font-size": 12 }, "dBFS");
+  if (rc) for (const [v, color, label] of [[rc.ruptura, "#d99a00", "ruptura"], [rc.los, "#2a78d6", "horizonte"]]) {
+    if (v < x0 || v > x1) continue;                          // fuera de escala: solo en la leyenda
+    add("line", { x1: X(v), x2: X(v), y1: m.t, y2: H - m.b, stroke: color, "stroke-width": 2, "stroke-dasharray": "6 4" });
+    const left = X(v) > W - m.r - 90;                        // etiqueta a la izquierda si no cabe a la derecha
+    const tx = add("text", { x: X(v) + (left ? -4 : 4), y: m.t + 11, "text-anchor": left ? "end" : "start", fill: ink, "font-size": 11 },
+      `${label} ${v.toFixed(2)} km`);
+    tx.style.paintOrder = "stroke"; tx.style.stroke = surf; tx.style.strokeWidth = "3px";
+  }
   for (const r of d) {
     const c = cssVar(r.ch === "A" ? "--s1" : "--s2");
     add("circle", { cx: X(r.dist_km), cy: Y(r.p), r: 4, fill: c, stroke: surf, "stroke-width": 1.5 });
@@ -815,6 +865,26 @@ function renderMeteo() {
   makePlot("#c-blh", [hx, H.map((h) => h.capa_limite_m)], [ser("Capa límite (GFS)", "--s1", " m")], "m", 220);
   renderSonde(sondes);
   renderMetar(met);
+  renderReachTable(med(vals("k")));
+}
+
+// Tabla de alcance teórico por categoría de barco (k estándar y k mediano del día si hay atmósfera publicada)
+function renderReachTable(kDay) {
+  const tab = $("#t-reach"), p = (S.status || {}).propagacion;
+  if (!p) { tab.replaceChildren(); $("#reach-note").textContent = "Sin parámetros de propagación en el estado publicado."; return; }
+  const rx = reach("other", kDay), k1 = horizKm(rx.hr, 1), kS = horizKm(rx.hr, p.k_estandar);
+  $("#reach-note").textContent = `Receptor a ${rx.hr} m s.n.m.${rx.prov ? " (provisional: confirmar la altura real de la antena)" : ""}; `
+    + `λ = ${(C_LUZ / p.freq_hz).toFixed(3)} m. Horizonte del receptor: ${fmt1(k1)} km (k = 1), ${fmt1(kS)} km (k = ${p.k_estandar.toFixed(2)})`
+    + (kDay ? `, ${fmt1(rx.hRx)} km (k = ${kDay.toFixed(2)}, mediana del día).` : ".")
+    + " Alturas de las antenas de los barcos: valores típicos por categoría (AIS no las transmite).";
+  const head = ["Categoría", "h antena (m)", "Ruptura (km)", "Horizonte del barco (km)", "Alcance k = 1 (km)",
+                `Alcance k = ${p.k_estandar.toFixed(2)} (km)`, ...(kDay ? [`Alcance k = ${kDay.toFixed(2)} (km)`] : [])];
+  const rows = CATS.map((c) => {
+    const a = reach(c.k, p.k_estandar), b = reach(c.k, 1), d = kDay ? reach(c.k, kDay) : null;
+    return [c.label, a.ht, a.ruptura.toFixed(2), a.hTx.toFixed(1), b.los.toFixed(1), a.los.toFixed(1), ...(d ? [d.los.toFixed(1)] : [])];
+  });
+  tab.replaceChildren(el("thead", {}, el("tr", {}, ...head.map((h) => el("th", { textContent: h })))),
+    el("tbody", {}, ...rows.map((r) => el("tr", {}, ...r.map((v) => el("td", { textContent: String(v) }))))));
 }
 
 // Perfiles M(h) de los radiosondeos (0–3 km) con los conductos sombreados

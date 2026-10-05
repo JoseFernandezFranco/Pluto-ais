@@ -7,7 +7,7 @@
 <meta name="description" content="Potencia recibida (RSSI) de cada trama AIS de los barcos en movimiento, con su trayectoria. ADALM-Pluto, UPCT.">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="style.css?v=1791025222">
+<link rel="stylesheet" href="style.css?v=1791209133">
 </head>
 <body>
 <header>
@@ -111,6 +111,14 @@
       <section class="card"><h2>Factor de radio terrestre efectivo k</h2><div id="c-k" class="chart"></div></section>
       <section class="card"><h2>Refractividad en superficie</h2><div id="c-nsup" class="chart"></div></section>
     </div>
+    <h2 class="group">Alcance radioeléctrico teórico <span class="muted small">(punto de ruptura de dos rayos y horizonte; 162 MHz)</span></h2>
+    <section class="card">
+      <p class="note" id="reach-note"></p>
+      <div class="table-wrap"><table id="t-reach"></table></div>
+      <p class="muted small">Ruptura d<sub>b</sub> = 4·h<sub>t</sub>·h<sub>r</sub>/λ: hasta ahí la potencia oscila (lóbulos de interferencia con la reflexión en el mar) alrededor
+        de la de espacio libre (−20 dB/década); más allá, en el modelo ideal cae como 1/d⁴ (−40 dB/década). Horizonte: d = √(2·k·R·h); el alcance es la suma de los
+        horizontes de las dos antenas y solo es una cota: edificios y colinas lo acortan. En la pestaña Mapa, ambas distancias aparecen en la gráfica de potencia y como círculos en el mapa.</p>
+    </section>
     <section class="card">
       <div class="card-head">
         <h2>Radiosondeos de Murcia <span class="muted small">(cada 10 m; franjas = conductos, más intensas si tienen ≥ 100 m, lo que hace falta para atrapar 162 MHz)</span></h2>
@@ -155,6 +163,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="app.js?v=1791025222"></script>
+<script src="app.js?v=1791209133"></script>
 </body>
 </html>
