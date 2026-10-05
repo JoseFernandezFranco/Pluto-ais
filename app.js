@@ -602,7 +602,9 @@ function renderDistChart(rows) {
       `Horizonte radioeléctrico ${rc.los.toFixed(1)} km (k ${rc.k.toFixed(2)}${rc.k === rc.kStd ? ", estándar" : ""})`));
   const W = box.clientWidth, H = 240, m = { l: 52, r: 12, t: 22, b: 34 };
   const xs = d.map((r) => r.dist_km), ys = d.map((r) => r.p);
-  const x0 = Math.max(0, Math.floor(Math.min(...xs) * 10) / 10 - 0.1), x1 = Math.ceil(Math.max(...xs) * 10) / 10 + 0.1;
+  let x0 = Math.max(0, Math.floor(Math.min(...xs) * 10) / 10 - 0.1);
+  const x1 = Math.ceil(Math.max(...xs) * 10) / 10 + 0.1;
+  if (rc) x0 = Math.max(0, Math.min(x0, Math.floor(rc.ruptura * 10) / 10 - 0.1));   // la ruptura siempre a la vista
   const y0 = Math.floor((Math.min(...ys) - 2) / 5) * 5, y1 = Math.ceil((Math.max(...ys) + 2) / 5) * 5;
   const X = (v) => m.l + ((v - x0) / (x1 - x0)) * (W - m.l - m.r);
   const Y = (v) => m.t + ((y1 - v) / (y1 - y0)) * (H - m.t - m.b);
@@ -629,14 +631,14 @@ function renderDistChart(rows) {
   }
   add("text", { x: W - m.r, y: H - 4, "text-anchor": "end", fill: ink, "font-size": 12 }, "distancia al receptor (km)");
   add("text", { x: 4, y: 12, fill: ink, "font-size": 12 }, "dBFS");
-  if (rc) for (const [v, color, label] of [[rc.ruptura, "#d99a00", "ruptura"], [rc.los, "#2a78d6", "horizonte"]]) {
-    if (v < x0 || v > x1) continue;                          // fuera de escala: solo en la leyenda
-    add("line", { x1: X(v), x2: X(v), y1: m.t, y2: H - m.b, stroke: color, "stroke-width": 2, "stroke-dasharray": "6 4" });
-    const left = X(v) > W - m.r - 90;                        // etiqueta a la izquierda si no cabe a la derecha
-    const tx = add("text", { x: X(v) + (left ? -4 : 4), y: m.t + 11, "text-anchor": left ? "end" : "start", fill: ink, "font-size": 11 },
-      `${label} ${v.toFixed(2)} km`);
+  if (rc) [[rc.ruptura, "#d99a00", "ruptura"], [rc.los, "#2a78d6", "horizonte"]].forEach(([v, color, label], i) => {
+    const out = v > x1 ? 1 : v < x0 ? -1 : 0, xv = Math.min(Math.max(v, x0), x1);   // fuera de escala: línea en el borde + flecha
+    add("line", { x1: X(xv), x2: X(xv), y1: m.t, y2: H - m.b, stroke: color, "stroke-width": 2, "stroke-dasharray": "6 4" });
+    const left = out > 0 || X(xv) > W - m.r - 110;                                    // etiqueta a la izquierda si no cabe a la derecha
+    const tx = add("text", { x: X(xv) + (left ? -4 : 4), y: m.t + 11 + 14 * i, "text-anchor": left ? "end" : "start", fill: ink, "font-size": 11 },
+      `${out < 0 ? "◄ " : ""}${label} ${v.toFixed(v < 10 ? 2 : 1)} km${out > 0 ? " ►" : ""}`);
     tx.style.paintOrder = "stroke"; tx.style.stroke = surf; tx.style.strokeWidth = "3px";
-  }
+  });
   for (const r of d) {
     const c = cssVar(r.ch === "A" ? "--s1" : "--s2");
     add("circle", { cx: X(r.dist_km), cy: Y(r.p), r: 4, fill: c, stroke: surf, "stroke-width": 1.5 });
