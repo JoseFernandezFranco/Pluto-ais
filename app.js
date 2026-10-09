@@ -96,7 +96,7 @@ async function getTracks(url, bust) {
   const r = await fetch(bust ? `${url}?v=${Date.now()}` : url);
   if (!r.ok) return [];
   const txt = await new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).text();
-  const lines = txt.split("\n");
+  const lines = txt.split(/\r?\n/);    // los CSV de csv.writer acaban en \r\n
   const head = lines[0].split(",");
   const num = new Set(["t", "lat", "lon", "sog", "cog", "dist_km", "p", "snr", "mov", "p_own", "foff_hz"]);
   const out = [];
