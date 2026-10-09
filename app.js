@@ -98,7 +98,7 @@ async function getTracks(url, bust) {
   const txt = await new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).text();
   const lines = txt.split("\n");
   const head = lines[0].split(",");
-  const num = new Set(["t", "lat", "lon", "sog", "cog", "dist_km", "p", "snr", "mov", "p_own"]);
+  const num = new Set(["t", "lat", "lon", "sog", "cog", "dist_km", "p", "snr", "mov", "p_own", "foff_hz"]);
   const out = [];
   for (let i = 1; i < lines.length; i++) {
     if (!lines[i]) continue;
@@ -771,13 +771,13 @@ const srcText = (r) => (r.src === "ac"
   ? `potencia: AIS-catcher${r.p_own != null ? ` · nuestra: ${fmt1(r.p_own)} dBFS` : " · bajo nuestro umbral de detección"}`
   : `potencia: nuestra cadena${r.src === "own" ? " (AIS-catcher no la tiene)" : ""}`);
 const CSV_COLS = ["utc", "mmsi", "nombre", "trip", "ch", "lat", "lon", "pos", "sog_kn", "cog", "dist_km", "power_dbfs", "snr_db",
-                  "power_src", "power_own_dbfs",
+                  "power_src", "power_own_dbfs", "freq_offset_hz",
                   "msg_type", ...METEO_COLS.map((c) => "boya_" + c), ...ENV_COLS];
 function downloadCSV(rows, name) {
   const names = new Map([...S.trips, ...S.shipTrips].map((t) => [t.trip, t.name]));
   const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
   const lines = [CSV_COLS.join(",")].concat(rows.map((r) => [new Date(r.t * 1000).toISOString(), r.mmsi, names.get(r.trip) || "",
-    r.trip, r.ch, r.lat, r.lon, r.pos, r.sog, r.cog, r.dist_km, r.p, r.snr, r.src || "own", r.p_own, r.msg,
+    r.trip, r.ch, r.lat, r.lon, r.pos, r.sog, r.cog, r.dist_km, r.p, r.snr, r.src || "own", r.p_own, r.foff_hz, r.msg,
     ...METEO_COLS.map((c) => (meteoAt(r.t) || {})[c]), ...ENV_COLS.map((c) => (envOf(r) || {})[c])].map(esc).join(",")));
   const a = el("a", { href: URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" })), download: name });
   document.body.append(a); a.click(); a.remove();
