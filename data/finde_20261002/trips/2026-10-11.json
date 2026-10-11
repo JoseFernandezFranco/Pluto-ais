@@ -1,1 +1,1 @@
-[]
+[{"trip":"224304670-20261011T000533","mmsi":"224304670","name":"CARTAGENA PILOT","type":"Pilot Vessel","class":"Clase B (2 W / 5 W)","start":1791677133.2,"end":1791677497.1,"n":8,"nA":5,"nB":3,"p_min":-59.83,"p_max":-54.63,"d_min":0.989,"d_max":1.713,"sog_med":10.6,"bbox":[37.587112,-0.986045,37.595215,-0.984083],"segs":["current"]}]
