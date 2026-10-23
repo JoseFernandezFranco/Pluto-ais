@@ -485,11 +485,14 @@ function renderMap() {
   // Resaltado: el trayecto elegido; en modo barco, todos sus trayectos
   const hl = S.sel ? rows.filter((r) => r.trip === S.sel) : S.ship ? rows : [];
   const scale = hl.length ? hl : rows;
-  const ps = scale.map((r) => r.p);
-  const lo = ps.length ? Math.min(...ps) : -60, hi = ps.length ? Math.max(...ps) : -30;
+  // reduce y no Math.min(...ps): con decenas de miles de tramas el spread es lento (y puede desbordar la pila)
+  const ps = scale.map((r) => r.p).filter((p) => p != null);
+  const lo = ps.length ? ps.reduce((a, b) => Math.min(a, b)) : -60, hi = ps.length ? ps.reduce((a, b) => Math.max(a, b)) : -30;
+  // Búsquedas con Set/Map: con some()/find() dentro de los bucles el coste crecía con el cuadrado de las tramas
+  const hlTrips = new Set(hl.map((r) => r.trip));
 
   // Vista primero (antes de añadir líneas)
-  const hlPath = (S.ship ? S.shipPaths : S.paths).filter((r) => hl.some((h) => h.trip === r.trip));
+  const hlPath = (S.ship ? S.shipPaths : S.paths).filter((r) => hlTrips.has(r.trip));
   const pts = (hl.length ? [...hl, ...hlPath] : rows).map((r) => [r.lat, r.lon]);
   if (rx.lat != null && !hl.length) pts.push([rx.lat, rx.lon]);
   if (pts.length > 1) S.map.fitBounds(L.latLngBounds(pts).pad(0.15), { maxZoom: 16, animate: false });
@@ -499,12 +502,13 @@ function renderMap() {
   const byTrip = new Map();
   for (const r of rows) byTrip.set(r.trip, []);
   for (const r of ppool) (byTrip.get(r.trip) || byTrip.set(r.trip, []).get(r.trip)).push(r);
-  for (const r of rows) if (!ppool.some((p) => p.trip === r.trip)) byTrip.get(r.trip).push(r);
-  const hlTrips = new Set(hl.map((r) => r.trip));
+  const withPath = new Set(ppool.map((p) => p.trip));
+  for (const r of rows) if (!withPath.has(r.trip)) byTrip.get(r.trip).push(r);
+  const tripById = new Map((S.ship ? S.shipTrips : S.trips).map((x) => [x.trip, x]));
   for (const [trip, tr] of byTrip) {
     if (!tr.length) continue;
     const isHl = hlTrips.has(trip);
-    const t = (S.ship ? S.shipTrips : S.trips).find((x) => x.trip === trip) || {};
+    const t = tripById.get(trip) || {};
     L.polyline(tr.map((r) => [r.lat, r.lon]), { color: "#ffffff", weight: isHl ? 3 : 2, opacity: isHl ? 0.9 : 0.45 })
       .bindTooltip(el("div", { textContent: `${t.name || t.mmsi} · ${fmtHM(t.start)}–${fmtHM(t.end)} (${fmtDur(t.end - t.start)})` }), { sticky: true })
       .on("click", () => selectTrip(trip)).addTo(S.layer);
@@ -1003,12 +1007,16 @@ function renderEstado() {
 // ---------------------------------------------------------------- orquestación
 function current() { return { "#estado": "estado", "#meteo": "meteo" }[location.hash] || "mapa"; }
 
-function showTab(name) {
+function setTab(name) {
   if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
   for (const t of ["mapa", "meteo", "estado"]) {
     $(`#tab-${t}`).setAttribute("aria-selected", String(t === name));
     $(`#p-${t}`).hidden = t !== name;
   }
+}
+
+function showTab(name) {
+  setTab(name);
   render();
 }
 
@@ -1038,9 +1046,12 @@ async function changeDay(day) {
   }
 }
 
-async function reload() {
+// force = false (recarga automática): no redibuja si no se ha publicado nada desde la última vez
+async function reload(force = true) {
   try {
+    const prev = S.status && S.status.published_utc;
     await loadCampaign(S.camp);
+    if (!force && prev && S.status.published_utc === prev) { renderStatus(); return; }
     await changeDay(S.day);
   } catch (e) {
     $("#subtitle").textContent = `Error cargando datos: ${e.message}`;
@@ -1078,13 +1089,13 @@ async function init() {
   let rt;
   addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(render, 200); });
   addEventListener("hashchange", () => showTab(current()));
-  setInterval(reload, 5 * 60 * 1000);          // los datos se publican cada 15 min
+  setInterval(() => reload(false), 5 * 60 * 1000);          // los datos se publican cada 15 min
   S.sel = new URLSearchParams(location.search).get("trip");   // enlace directo a un trayecto
   if (S.sel) S.day = (() => { const m = S.sel.match(/-(\d{4})(\d{2})(\d{2})T/); return m ? `${m[1]}-${m[2]}-${m[3]}` : null; })();
+  setTab(current());                           // pestaña antes de cargar: reload ya dibuja (una sola vez)
   await reload();
   const ship = new URLSearchParams(location.search).get("ship");   // enlace directo a un barco
   if (ship && S.ships.some((x) => x.mmsi === ship)) await selectShip(ship);
-  showTab(current());
 }
 
 init();
