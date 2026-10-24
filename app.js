@@ -143,6 +143,12 @@ const ENV_COLS = ["hm0_m", "costa_hm0_m", "costa_tp_s", "costa_tm02_s", "costa_t
   "radiacion_wm2", "nubosidad_pct", "n_sup", "dndh_1km", "k", "dt_mar_aire_c", "fuente_oleaje", "fuente_corr"];
 const envKey = (r) => `${(+r.t).toFixed(2)}|${r.mmsi}|${r.ch}`;
 const envOf = (r) => S.env.get(envKey(r));
+// fuente_* = "<modelo> <archivo>" (hasta el 2026-10-24 solo el archivo); del más fino al más grueso
+const MODEL_NAMES = { wave_local_a03b: "del puerto, 5 m", wave_coast_s03b: "costero, 340 m",
+  wave_coast_s09b: "costero de Alicante, 340 m", wave_coast_s03a: "costero amplio, 1 km", wave_regional_aib: "regional, 3 km",
+  circulation_local_car: "del puerto, 60 m", circulation_coastal_car: "costero, 380 m", circulation_coastal_ali: "costero de Alicante" };
+const modelName = (src, dflt) => MODEL_NAMES[(src || "").split(" ")[0]] || dflt;
+const srcLabel = (src) => { const [m, f] = (src || "").split(" "); return !src ? "—" : f ? `${MODEL_NAMES[m] || m} (${f})` : src; };
 async function ensureEnv(days) {
   const recent = new Date(Date.now() - 3 * 86400e3).toISOString().slice(0, 10);
   await Promise.all(days.filter(Boolean).map(async (d) => {
@@ -296,8 +302,8 @@ function pointCard(r) {
   } else {
     const port = e.puerto_hm0_m != null;
     sec("Mar (Puertos del Estado)", [
-      ["Altura de ola Hm0", `${fmtN(e.hm0_m, 2, " m")} (${port ? "modelo del puerto" : "modelo costero"})`],
-      ["Ola (modelo costero)", fmtN(e.costa_hm0_m, 2, " m")], ["Mar de fondo", fmtN(e.costa_swell_hm0_m, 2, " m")],
+      ["Altura de ola Hm0", `${fmtN(e.hm0_m, 2, " m")} (modelo ${modelName(e.fuente_oleaje, port ? "del puerto" : "costero")})`],
+      ["Ola fuera del puerto", fmtN(e.costa_hm0_m, 2, " m")], ["Mar de fondo", fmtN(e.costa_swell_hm0_m, 2, " m")],
       ["Periodo de pico", fmtN(e.costa_tp_s, 1, " s")], ["Periodo medio Tm02 / Tm0z", `${fmtN(e.costa_tm02_s, 1)} / ${fmtN(e.costa_tm0z_s, 1)} s`],
       ["Oleaje viene del", `${fmtN(e.costa_dir_media_deg, 0, "°")} (pico ${fmtN(e.costa_dir_pico_deg, 0, "°")})`]]);
     sec("Agua", [["Corriente", `${fmtN(e.corr_vel_ms == null ? null : e.corr_vel_ms * 100, 1, " cm/s")} hacia ${fmtN(e.corr_dir_deg, 0, "°")}`],
@@ -312,7 +318,7 @@ function pointCard(r) {
     sec("Refracción (ITU-R P.453)", [["N en superficie", fmtN(e.n_sup, 1, " N")],
       ["dN/dh (0–1 km)", `${fmtN(e.dndh_1km, 1, " N/km")} · ${refrClass(e.dndh_1km)}`], ["Factor k", fmtN(e.k, 3)],
       ["T agua − T aire", `${fmtN(dt, 2, " °C")}${dt == null ? "" : dt > 0 ? " (aire inestable)" : " (aire estable: favorece conductos)"}`]]);
-    card.append(el("div", { className: "pt-src", textContent: `Modelos: oleaje ${e.fuente_oleaje || "—"} · corriente ${e.fuente_corr || "—"} (HC = análisis, FC = pronóstico)` }));
+    card.append(el("div", { className: "pt-src", textContent: `Modelos: oleaje ${srcLabel(e.fuente_oleaje)} · corriente ${srcLabel(e.fuente_corr)} (HC = análisis, FC = pronóstico)` }));
   }
   if (m) card.append(el("div", { className: "pt-src", textContent: meteoText(m) }));
   return card;
