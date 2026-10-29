@@ -336,6 +336,7 @@ async function loadCampaign(name) {
 
 async function loadDay(day) {
   S.day = day;
+  MallaCapa.refresh();
   if (!day) { S.trips = []; S.bins = []; S.rows = []; return; }
   const [trips, bins] = await Promise.all([getJSON(`${base()}trips/${day}.json`).catch(() => []),
                                            getJSON(`${base()}bins/${day}.json`).catch(() => [])]);
@@ -421,7 +422,10 @@ function initMap() {
   const osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" });
   S.map = L.map("map", { layers: [sat], scrollWheelZoom: true });
   S.reach = L.layerGroup().addTo(S.map);
-  L.control.layers({ "Satélite": sat, "Mapa": osm }, { "Alcance teórico (ruptura y horizonte)": S.reach }, { position: "topright" }).addTo(S.map);
+  S.mallaLayer = L.layerGroup();                     // «Malla del entorno» (web/malla-capa.js): apagada por defecto
+  L.control.layers({ "Satélite": sat, "Mapa": osm },
+    { "Alcance teórico (ruptura y horizonte)": S.reach, "Malla del entorno (celdas de mar)": S.mallaLayer }, { position: "topright" }).addTo(S.map);
+  MallaCapa.init(S.map, S.mallaLayer, () => ({ camp: S.camp, day: S.day }));
   L.control.scale({ imperial: false }).addTo(S.map);
   S.layer = L.layerGroup().addTo(S.map);
   S.fleet = L.layerGroup().addTo(S.map);

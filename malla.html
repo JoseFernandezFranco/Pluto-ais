@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Malla del entorno · Pluto-AIS</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<style>
+html,body{height:100%;margin:0;font:14px system-ui,sans-serif}#map{position:absolute;inset:0}
+.panel{position:absolute;z-index:1000;background:#fffffff2;border-radius:8px;box-shadow:0 1px 6px #0006;padding:10px 12px}
+#ctl{top:10px;right:10px;width:320px;max-height:calc(100% - 40px);overflow:auto}#ctl h3{margin:0 0 4px;font-size:15px}
+#ctl label{display:block;margin-top:8px;font-weight:600}#ctl select,#ctl input[type=range]{width:100%}
+#leg{bottom:24px;left:10px;width:260px}#bar{height:12px;border-radius:3px;margin:4px 0}
+#leg .r{display:flex;justify-content:space-between;font-size:12px}.note{font-size:12px;color:#555;margin-top:8px}
+button{padding:2px 10px}a{color:#0a58ca}table.p td{padding:1px 8px 1px 0;font-size:12px}table.p td:last-child{font-weight:600}
+details{margin-top:10px;font-size:12px}pre{background:#f3f3f3;padding:6px;border-radius:4px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:4px 0}
+#msg{color:#b00;font-size:12px;margin-top:6px}
+</style></head><body><div id="map"></div>
+<div class="panel" id="ctl">
+ <h3>Malla del entorno <a href="./" style="font-weight:400;font-size:12px">← panel</a></h3>
+ <div class="note" style="margin-top:0">Entorno de cada celda de mar (acimut × distancia al receptor), cada hora, <b>haya o no barcos</b>.</div>
+ <label>Campaña</label><select id="camp"></select>
+ <label>Día (UTC)</label><select id="day"></select>
+ <label>Variable</label><select id="var"></select>
+ <label>Hora (UTC): <span id="hl"></span> <button id="play">▶</button></label><input id="hr" type="range" min="0" max="23" value="12">
+ <label>Opacidad</label><input id="op" type="range" min="10" max="100" value="75">
+ <div class="note" id="info"></div><div id="msg"></div>
+ <details open><summary><b>Descargar los datos</b></summary>
+  <p style="margin:6px 0"><a id="dl" href="#">Este día (CSV comprimido)</a> · <a id="dlidx" href="#">índice de días</a></p>
+  <p style="margin:4px 0">Todos los días, en terminal:</p><pre id="sh"></pre>
+  <p style="margin:4px 0">Python (pandas):</p><pre id="py"></pre>
+  <p style="margin:4px 0">Columnas: <code>t</code> (s UTC), <code>az</code> (° desde el N, centro), <code>r_km</code> (centro del anillo de 20 km), <code>lat</code>, <code>lon</code> y las variables del entorno; las vacías son «sin dato».</p>
+ </details></div>
+<div class="panel" id="leg"><div id="lt" style="font-weight:600"></div><div id="bar"></div>
+<div class="r"><span id="l0"></span><span id="l1"></span></div></div>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const VARS={hm0_m:["Altura significante del oleaje","m",2],costa_tp_s:["Periodo pico del oleaje","s",1],costa_dir_media_deg:["Dirección del oleaje","°",0],
+ corr_vel_ms:["Velocidad de la corriente","m/s",3],corr_dir_deg:["Dirección de la corriente (hacia)","°",0],temp_agua_c:["Temperatura del agua","°C",2],
+ salinidad_psu:["Salinidad","PSU",2],viento_ms:["Viento a 10 m","m/s",1],viento_dir_deg:["Dirección del viento (de)","°",0],rafaga_ms:["Racha","m/s",1],
+ presion_hpa:["Presión","hPa",1],temp_aire_c:["Temperatura del aire","°C",1],humedad_pct:["Humedad relativa","%",0],nubosidad_pct:["Nubosidad","%",0],
+ n_sup:["Refractividad en superficie N","N",1],dndh_1km:["Gradiente dN/dh 0–1 km","N/km",1],k:["Factor k efectivo","",3],dt_mar_aire_c:["T agua − T aire","°C",2]};
+const MAPV=["hm0_m","corr_vel_ms","temp_agua_c","salinidad_psu","viento_ms","temp_aire_c","n_sup","dndh_1km","k","dt_mar_aire_c","presion_hpa","humedad_pct","nubosidad_pct","costa_tp_s","rafaga_ms"];
+const ANTENA=[37.601907,-0.978648],AZ=10,RS=20,RMAX=320;           // = config.yaml (receiver, entorno.malla)
+const R=111.19,rad=Math.PI/180;
+const pt=(az,r)=>[ANTENA[0]+r*Math.cos(az*rad)/R,ANTENA[1]+r*Math.sin(az*rad)/(R*Math.cos(ANTENA[0]*rad))];
+function poly(az,r){const a0=az-AZ/2,a1=az+AZ/2,r0=r-RS/2,r1=r+RS/2,n=4,p=[];
+ for(let k=0;k<=n;k++)p.push(pt(a0+(a1-a0)*k/n,r1));for(let k=n;k>=0;k--)p.push(pt(a0+(a1-a0)*k/n,r0));return p;}
+const map=L.map("map").setView(ANTENA,7);
+const sat=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",{maxZoom:18,attribution:"Esri"}).addTo(map);
+const osm=L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"});
+L.control.layers({"Satélite":sat,"Mapa":osm}).addTo(map);
+for(let r=RS;r<=RMAX;r+=RS*2){const c=[];for(let a=0;a<=360;a+=3)c.push(pt(a,r));
+ L.polyline(c,{color:"#335",weight:1,opacity:.35,dashArray:"3 4"}).addTo(map).bindTooltip(r+" km",{sticky:true});}
+L.circleMarker(ANTENA,{radius:6,color:"#c00",fillColor:"#f33",fillOpacity:1}).addTo(map).bindTooltip("Receptor");
+const stops=[[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+function col(t){t=Math.max(0,Math.min(1,t));const x=t*(stops.length-1),i=Math.min(stops.length-2,Math.floor(x)),f=x-i,a=stops[i],b=stops[i+1];
+ return "rgb("+a.map((v,k)=>Math.round(v+(b[k]-v)*f)).join(",")+")";}
+$("#bar").style.background="linear-gradient(90deg,"+[0,.25,.5,.75,1].map(t=>col(t)).join(",")+")";
+let D=null,polys=[],cur=null;
+const base=()=>`data/${$("#camp").value}/entorno_malla/`;
+async function getJSON(u){const r=await fetch(u+"?v="+Date.now());if(!r.ok)throw new Error(u+" → "+r.status);return r.json();}
+async function loadDay(){
+ const day=$("#day").value;$("#msg").textContent="Cargando "+day+"…";
+ try{const r=await fetch(`${base()}${day}.csv.gz`);if(!r.ok)throw new Error("HTTP "+r.status);
+  const txt=await new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).text();
+  const L_=txt.split("\n"),head=L_[0].split(","),cells=new Map(),rows=[];let t0=1e99;
+  for(let i=1;i<L_.length;i++){if(!L_[i])continue;const v=L_[i].split(",");rows.push(v);t0=Math.min(t0,+v[0]);}
+  rows.forEach(v=>{const k=v[1]+"|"+v[2];if(!cells.has(k))cells.set(k,[+v[1],+v[2]]);});
+  const list=[...cells.values()].sort((a,b)=>a[0]-b[0]||a[1]-b[1]),idx=new Map(list.map((c,i)=>[c[0]+"|"+c[1],i]));
+  const present=head.slice(5).filter(h=>VARS[h]),data={};
+  present.forEach(h=>data[h]=Array.from({length:24},()=>new Array(list.length).fill(null)));
+  rows.forEach(v=>{const hh=Math.round((+v[0]-t0)/3600),i=idx.get(v[1]+"|"+v[2]);if(hh<0||hh>23)return;
+   head.forEach((h,k)=>{if(k>=5&&data[h]&&v[k]!=="")data[h][hh][i]=+v[k];});});
+  const ok={};present.forEach(h=>ok[h]=data[h].some(a=>a.some(x=>x!==null)));
+  D={day,cells:list,data,ok};$("#msg").textContent="";build();
+ }catch(e){$("#msg").textContent="No se pudo cargar "+day+": "+e.message;}
+}
+function build(){polys.forEach(p=>map.removeLayer(p));
+ polys=D.cells.map(([az,r],i)=>L.polygon(poly(az,r),{weight:.5,color:"#222",fillOpacity:.75}).addTo(map).on("click",()=>popup(i)));
+ const sel=$("#var"),prev=sel.value;sel.replaceChildren();
+ MAPV.filter(v=>v in D.data).forEach(v=>{const m=VARS[v],o=document.createElement("option");o.value=v;
+  o.textContent=m[0]+(m[1]?" ("+m[1]+")":"")+(D.ok[v]?"":" — sin datos este día");if(!D.ok[v])o.disabled=true;sel.appendChild(o);});
+ sel.value=D.ok[prev]?prev:MAPV.find(v=>D.ok[v])||"";
+ $("#dl").href=`${base()}${D.day}.csv.gz`;draw();}
+function range(v){let lo=1e99,hi=-1e99;D.data[v].forEach(h=>h.forEach(x=>{if(x!==null){lo=Math.min(lo,x);hi=Math.max(hi,x);}}));
+ if(lo===hi){lo-=.5;hi+=.5;}return[lo,hi];}
+function draw(){if(!D)return;const v=$("#var").value;if(!v)return;const h=+$("#hr").value,m=VARS[v],[lo,hi]=range(v),op=+$("#op").value/100;
+ $("#hl").textContent=String(h).padStart(2,"0")+":00";$("#lt").textContent=m[0]+(m[1]?" ("+m[1]+")":"");
+ $("#l0").textContent=lo.toFixed(m[2]);$("#l1").textContent=hi.toFixed(m[2]);let n=0;
+ polys.forEach((p,i)=>{const x=D.data[v][h][i];if(x===null)p.setStyle({fillOpacity:.08,fillColor:"#999"});else{n++;p.setStyle({fillColor:col((x-lo)/(hi-lo)),fillOpacity:op});}});
+ $("#info").textContent=D.day+": "+n+" de "+D.cells.length+" celdas de mar con dato a esta hora. Escala fija para todo el día. Clic en una celda: todos sus valores.";}
+function popup(i){const h=+$("#hr").value,[az,r]=D.cells[i];let s="<b>Acimut "+az+"° · "+(r-RS/2)+"–"+(r+RS/2)+" km</b><br>"+String(h).padStart(2,"0")+":00 UTC<table class=p>";
+ Object.keys(D.data).forEach(v=>{const x=D.data[v][h][i],m=VARS[v];s+="<tr><td>"+m[0]+"</td><td>"+(x===null?"—":x+" "+m[1])+"</td></tr>";});
+ L.popup().setLatLng(pt(az,r)).setContent(s+"</table>").openOn(map);}
+["#var","#hr","#op"].forEach(s=>$(s).addEventListener("input",draw));
+$("#day").addEventListener("change",loadDay);
+let timer=null;$("#play").onclick=()=>{if(timer){clearInterval(timer);timer=null;$("#play").textContent="▶";}
+ else{$("#play").textContent="⏸";timer=setInterval(()=>{$("#hr").value=(+$("#hr").value+1)%24;draw();},600);}};
+function recipes(){const u=new URL(base(),location.href).href,c=$("#camp").value;
+ $("#sh").textContent=`# todos los días publicados\nfor d in $(curl -s ${u}index.json | grep -o '20[0-9-]*'); do\n  curl -sO ${u}$d.csv.gz\ndone`;
+ $("#py").textContent=`import pandas as pd, requests\nbase = "${u}"\ndias = requests.get(base + "index.json").json()["dias"]\ndf = pd.concat(pd.read_csv(f"{base}{d}.csv.gz").assign(dia=d) for d in dias)\n# df.t = segundos UTC; df.az, df.r_km = celda; resto = variables`;
+ $("#dlidx").href=base()+"index.json";}
+async function loadCamp(){
+ try{const idx=await getJSON(base()+"index.json"),days=(idx.dias||[]).slice().reverse();
+  $("#day").replaceChildren(...days.map(d=>{const o=document.createElement("option");o.value=d;o.textContent=d;return o;}));
+  recipes();if(!days.length){$("#msg").textContent="Esta campaña aún no tiene días de malla publicados.";return;}
+  await loadDay();map.fitBounds(L.latLngBounds([pt(0,RMAX),pt(90,RMAX),pt(180,RMAX),pt(270,RMAX)]),{padding:[20,20]});
+ }catch(e){$("#msg").textContent="Aún no hay malla publicada para esta campaña ("+e.message+").";}}
+(async()=>{let camps=[];try{camps=await getJSON("data/campaigns.json");}catch{}
+ $("#camp").replaceChildren(...camps.map(c=>{const o=document.createElement("option");o.value=c.name;o.textContent=c.name;return o;}));
+ $("#camp").addEventListener("change",loadCamp);if(camps.length)loadCamp();else $("#msg").textContent="Sin campañas publicadas.";})();
+</script></body></html>

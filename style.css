@@ -51,6 +51,8 @@ a { color: var(--s1); }
 .tabs { display: flex; gap: 4px; margin-top: 14px; border-bottom: 1px solid var(--grid); }
 .tabs button { font: inherit; background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 14px;
   color: var(--ink-2); cursor: pointer; margin-bottom: -1px; }
+.tabs a.tablink { font: inherit; padding: 8px 14px; color: var(--ink-2); text-decoration: none; margin-left: auto; }
+.tabs a.tablink:hover { color: var(--ink); text-decoration: underline; }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
 .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 12px; margin-bottom: 12px; }
 label { color: var(--ink-2); display: inline-flex; gap: 6px; align-items: center; }
