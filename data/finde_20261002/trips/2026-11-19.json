@@ -1,1 +1,1 @@
-[]
+[{"trip":"255915716-20261119T000803","mmsi":"255915716","name":"MUT OZT","type":"Tanker(s) - all ships of this type","class":"Clase A (12,5 W)","start":1795046883.9,"end":1795047314.5,"n":45,"nA":22,"nB":23,"p_min":-52.92,"p_max":-31.94,"d_min":5.145,"d_max":6.282,"sog_med":4.8,"bbox":[37.550049,-1.010017,37.560947,-1.005797],"segs":["current","seg_20261118T231037Z"]}]
